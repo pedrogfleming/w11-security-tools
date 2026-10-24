@@ -16,10 +16,10 @@ param(
     [switch]$SinPopup
 )
 
-$eventoLog   = "Seguridad-Port22"
-$logType     = "Application"
-$baseDir     = Join-Path $PSScriptRoot "baseline"
-$refTareasTxt = Join-Path $PSScriptRoot "tareas_baseline.txt"
+$eventoLog      = "Seguridad-Port22"
+$logType        = "Application"
+$script:baseDir = Join-Path $PSScriptRoot "baseline"
+$refTareasTxt   = Join-Path $PSScriptRoot "tareas_baseline.txt"
 
 $script:AprobarTodo   = [bool]$AprobarBaselines
 $script:AprobarTareas = ([bool]$AprobarTareas -or [bool]$AprobarBaselines)
@@ -82,15 +82,15 @@ function New-Hallazgo {
 }
 
 function Initialize-BaseDir {
-    if (-not (Test-Path $baseDir)) {
-        try { New-Item -ItemType Directory -Path $baseDir -Force | Out-Null }
-        catch { Write-Warning "No se pudo crear $baseDir : $($_.Exception.Message)" }
+    if (-not (Test-Path $script:baseDir)) {
+        try { New-Item -ItemType Directory -Path $script:baseDir -Force | Out-Null }
+        catch { Write-Warning "No se pudo crear $script:baseDir : $($_.Exception.Message)" }
     }
 }
 
 function Read-Baseline {
     param([string]$Nombre)
-    $f = Join-Path $baseDir "$Nombre.json"
+    $f = Join-Path $script:baseDir "$Nombre.json"
 
     # Devuelve un objeto siempre (nunca un array suelto): evita que PowerShell
     # "desenrolle" arreglos vacios o de un solo elemento al asignarlos.
@@ -110,7 +110,7 @@ function Read-Baseline {
 
 function Write-Baseline {
     param([string]$Nombre, [string[]]$Items)
-    $f = Join-Path $baseDir "$Nombre.json"
+    $f = Join-Path $script:baseDir "$Nombre.json"
     try {
         @{ items = @($Items | Sort-Object -Unique) } | ConvertTo-Json -Depth 5 |
             Set-Content -Path $f -Encoding UTF8
@@ -125,7 +125,6 @@ function Compare-ConBaseline {
         [string[]]$Actual,
         [switch]$Aprobar
     )
-    $f = Join-Path $baseDir "$Nombre.json"
     $actualOrdenado = @($Actual | Sort-Object -Unique)
 
     $lectura = Read-Baseline -Nombre $Nombre
@@ -211,7 +210,7 @@ function Test-TareasProgramadas {
         Sort-Object -Unique)
 
     # Migracion: si existe la baseline vieja en texto, se importa una vez
-    $jsonTareas = Join-Path $baseDir 'tareas.json'
+    $jsonTareas = Join-Path $script:baseDir 'tareas.json'
     if (-not (Test-Path $jsonTareas) -and (Test-Path $refTareasTxt)) {
         $previas = @(Get-Content $refTareasTxt | Where-Object { $_.Trim() } | Sort-Object -Unique)
         if ($previas.Count -gt 0) {

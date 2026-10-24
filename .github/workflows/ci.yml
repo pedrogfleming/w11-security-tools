@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  PSScriptAnalyzer:
+    name: PSScriptAnalyzer
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Instalar modulos
+        shell: pwsh
+        run: |
+          Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
+          Install-Module PSScriptAnalyzer -Scope CurrentUser -Force -AllowClobber
+          Install-Module Pester -Scope CurrentUser -Force -SkipPublisherCheck -RequiredVersion 5.7.1
+
+      - name: Analisis estatico
+        shell: pwsh
+        run: |
+          $resultado = Invoke-ScriptAnalyzer -Path . -Recurse -Severity Error -Settings ./PSScriptAnalyzerSettings.psd1
+          if ($resultado) {
+            $resultado | Format-Table RuleName, ScriptName, Line, Message -AutoSize | Out-String | Write-Host
+            throw "PSScriptAnalyzer encontro $(@($resultado).Count) errores."
+          }
+          'Sin errores de analisis estatico.'
+
+      - name: Reporte de advertencias
+        shell: pwsh
+        run: |
+          $resultado = Invoke-ScriptAnalyzer -Path . -Recurse -Severity Warning -Settings ./PSScriptAnalyzerSettings.psd1
+          $resultado | Format-Table RuleName, ScriptName, Line, Message -AutoSize | Out-String | Write-Host
+          "Advertencias: $(@($resultado).Count)"
+
+      - name: Tests de lineas base
+        shell: pwsh
+        run: |
+          $config = New-PesterConfiguration
+          $config.Run.Path = './tests'
+          $config.Run.Exit = $true
+          $config.Output.Verbosity = 'Detailed'
+          Invoke-Pester -Configuration $config

@@ -55,6 +55,9 @@ Cuando algo cambia: **evento en el Visor de Eventos** y, si es **critico**, **po
 | `Install-Radar.ps1` | Instalador/desinstalador automatico. | No |
 | `Radar.config.psd1` | Configuracion: umbrales, estados aceptados, whitelists. | No |
 | `README.md` | Este documento. | No |
+| `.github/` | Workflow de CI y rulesets de proteccion de `main`. | No |
+| `tests/` | Tests Pester de las funciones de linea base. | No |
+| `PSScriptAnalyzerSettings.psd1` | Reglas excluidas del lint (a proposito). | No |
 | `baseline\*.json` | Lineas base por chequeo (se crean solas). | Si |
 | `tareas_baseline.txt` | **Legacy**: se migra automaticamente a `baseline\tareas.json`. Se puede borrar. | No |
 | `Firewall.md` | Comando opcional de endurecimiento. | No |
@@ -587,7 +590,57 @@ Remove-Item "C:\Scripts\baseline" -Recurse -Force
 
 ---
 
-## 9. Alcance y limitaciones
+## 9. Calidad y proteccion de la rama
+
+### CI (GitHub Actions)
+
+`.github/workflows/ci.yml` corre en cada push o PR a `main`:
+
+1. **PSScriptAnalyzer** con `Severity Error` (falla el build si hay errores).
+2. **Reporte** de advertencias (no falla, queda visible).
+3. **Pester** sobre `tests\` (11 tests de las lineas base).
+
+El job se llama exactamente **`PSScriptAnalyzer`**, que es el `context` que exige el ruleset estricto.
+
+Para correr lo mismo local:
+
+```powershell
+Install-Module PSScriptAnalyzer -Scope CurrentUser -Force
+Install-Module Pester -Scope CurrentUser -Force -SkipPublisherCheck -RequiredVersion 5.7.1
+
+Invoke-ScriptAnalyzer -Path . -Recurse -Settings .\PSScriptAnalyzerSettings.psd1
+Invoke-Pester .\tests
+```
+
+### Rulesets
+
+| Archivo | Estado | Que hace |
+|---------|--------|----------|
+| `.github/rulesets/main-protection.json` | `active` | Bloquea borrar `main`, force-push y merge commits |
+| `.github/rulesets/main-protection-strict.json` | `evaluate` | Exige PR, check `PSScriptAnalyzer` y rama al dia |
+
+Importar: **Settings -> Rules -> Rulesets -> New ruleset -> Import a ruleset**.
+
+Por API:
+
+```powershell
+gh api --method POST repos/pedrogfleming/w11-security-tools/rulesets `
+  --input .github/rulesets/main-protection.json
+```
+
+> Un ruleset protege el **historial**, no detecta vulnerabilidades. Para eso: **secret scanning + push protection** (Settings -> Code security), el CI de arriba y revision de cambios. `required_approving_review_count` esta en 0 porque GitHub no permite aprobar el propio PR; con un solo mantenedor, exigir 1 aprobacion te deja fuera.
+
+### Secret scanning y push protection
+
+En un repo publico es gratis y es la proteccion mas rentable para este proyecto:
+
+1. Settings -> **Code security**.
+2. Activar **Secret scanning** y **Push protection**.
+3. Revisar que `.gitignore` cubra `baseline/` (ya cubierto).
+
+---
+
+## 10. Alcance y limitaciones
 
 - **Detecta, no previene.** No bloquea puertos, no mata procesos, no desinstala nada.
 - Es una **foto diaria**: si alguien abre el puerto 22 y lo cierra entre dos corridas, no se ve.
@@ -599,7 +652,7 @@ Remove-Item "C:\Scripts\baseline" -Recurse -Force
 
 ---
 
-## 10. Checklist final
+## 11. Checklist final
 
 - [ ] `Check-Port22.ps1` existe y empieza con BOM (`239 187 191`).
 - [ ] `Radar.config.psd1` presente (o se aceptan los defaults).
@@ -609,6 +662,10 @@ Remove-Item "C:\Scripts\baseline" -Recurse -Force
 - [ ] Tarea con 2 triggers, `RunLevel = Highest`, `LogonType = Interactive`.
 - [ ] `LastTaskResult = 0` y evento con la hora actual.
 - [ ] Prueba de popup: romper una baseline, ver el popup y restaurar con `-AprobarBaselines`.
+- [ ] `Invoke-Pester .\tests` pasa (11/11) y `Invoke-ScriptAnalyzer` no da errores.
+- [ ] Workflow **CI** verde tras el primer push.
+- [ ] Ruleset `main-protection` importado y **Active**.
+- [ ] Secret scanning + push protection activados en el repo.
 
 ---
 
@@ -635,10 +692,10 @@ param(
     [switch]$SinPopup
 )
 
-$eventoLog   = "Seguridad-Port22"
-$logType     = "Application"
-$baseDir     = Join-Path $PSScriptRoot "baseline"
-$refTareasTxt = Join-Path $PSScriptRoot "tareas_baseline.txt"
+$eventoLog      = "Seguridad-Port22"
+$logType        = "Application"
+$script:baseDir = Join-Path $PSScriptRoot "baseline"
+$refTareasTxt   = Join-Path $PSScriptRoot "tareas_baseline.txt"
 
 $script:AprobarTodo   = [bool]$AprobarBaselines
 $script:AprobarTareas = ([bool]$AprobarTareas -or [bool]$AprobarBaselines)
@@ -701,15 +758,15 @@ function New-Hallazgo {
 }
 
 function Initialize-BaseDir {
-    if (-not (Test-Path $baseDir)) {
-        try { New-Item -ItemType Directory -Path $baseDir -Force | Out-Null }
-        catch { Write-Warning "No se pudo crear $baseDir : $($_.Exception.Message)" }
+    if (-not (Test-Path $script:baseDir)) {
+        try { New-Item -ItemType Directory -Path $script:baseDir -Force | Out-Null }
+        catch { Write-Warning "No se pudo crear $script:baseDir : $($_.Exception.Message)" }
     }
 }
 
 function Read-Baseline {
     param([string]$Nombre)
-    $f = Join-Path $baseDir "$Nombre.json"
+    $f = Join-Path $script:baseDir "$Nombre.json"
 
     # Devuelve un objeto siempre (nunca un array suelto): evita que PowerShell
     # "desenrolle" arreglos vacios o de un solo elemento al asignarlos.
@@ -729,7 +786,7 @@ function Read-Baseline {
 
 function Write-Baseline {
     param([string]$Nombre, [string[]]$Items)
-    $f = Join-Path $baseDir "$Nombre.json"
+    $f = Join-Path $script:baseDir "$Nombre.json"
     try {
         @{ items = @($Items | Sort-Object -Unique) } | ConvertTo-Json -Depth 5 |
             Set-Content -Path $f -Encoding UTF8
@@ -744,7 +801,6 @@ function Compare-ConBaseline {
         [string[]]$Actual,
         [switch]$Aprobar
     )
-    $f = Join-Path $baseDir "$Nombre.json"
     $actualOrdenado = @($Actual | Sort-Object -Unique)
 
     $lectura = Read-Baseline -Nombre $Nombre
@@ -830,7 +886,7 @@ function Test-TareasProgramadas {
         Sort-Object -Unique)
 
     # Migracion: si existe la baseline vieja en texto, se importa una vez
-    $jsonTareas = Join-Path $baseDir 'tareas.json'
+    $jsonTareas = Join-Path $script:baseDir 'tareas.json'
     if (-not (Test-Path $jsonTareas) -and (Test-Path $refTareasTxt)) {
         $previas = @(Get-Content $refTareasTxt | Where-Object { $_.Trim() } | Sort-Object -Unique)
         if ($previas.Count -gt 0) {

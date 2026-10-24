@@ -159,7 +159,8 @@ Write-Step "2/5 - Fuente del Event Log"
 
 if ([System.Diagnostics.EventLog]::SourceExists($source)) {
     $logActual = ''
-    try { $logActual = [System.Diagnostics.EventLog]::LogNameFromSourceName($source, '.') } catch { }
+    try { $logActual = [System.Diagnostics.EventLog]::LogNameFromSourceName($source, '.') }
+    catch { $logActual = '' }
     if ($logActual -eq 'Application') {
         Write-Ok "La fuente '$source' ya existe en Application. No se toca."
     } else {
