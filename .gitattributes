@@ -1,0 +1,21 @@
+# Normalizacion de finales de linea.
+# En el repo se guarda LF; en el working tree de Windows los scripts quedan CRLF.
+* text=auto
+
+# PowerShell: CRLF al hacer checkout (compatible con Notepad y herramientas viejas)
+*.ps1  text eol=crlf
+*.psm1 text eol=crlf
+*.psd1 text eol=crlf
+
+# Texto y configuracion: LF
+*.md   text eol=lf
+*.txt  text eol=lf
+*.yml  text eol=lf
+*.yaml text eol=lf
+*.json text eol=lf
+
+# Binarios
+*.png  binary
+*.jpg  binary
+*.zip  binary
+*.evtx binary

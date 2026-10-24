@@ -58,6 +58,8 @@ Cuando algo cambia: **evento en el Visor de Eventos** y, si es **critico**, **po
 | `.github/` | Workflow de CI y rulesets de proteccion de `main`. | No |
 | `tests/` | Tests Pester de las funciones de linea base. | No |
 | `PSScriptAnalyzerSettings.psd1` | Reglas excluidas del lint (a proposito). | No |
+| `LICENSE` | Licencia MIT. | No |
+| `.gitattributes` | Normalizacion de line endings (LF en repo, CRLF en scripts). | No |
 | `baseline\*.json` | Lineas base por chequeo (se crean solas). | Si |
 | `tareas_baseline.txt` | **Legacy**: se migra automaticamente a `baseline\tareas.json`. Se puede borrar. | No |
 | `Firewall.md` | Comando opcional de endurecimiento. | No |
@@ -666,6 +668,12 @@ En un repo publico es gratis y es la proteccion mas rentable para este proyecto:
 - [ ] Workflow **CI** verde tras el primer push.
 - [ ] Ruleset `main-protection` importado y **Active**.
 - [ ] Secret scanning + push protection activados en el repo.
+
+---
+
+## Licencia
+
+MIT. Ver [`LICENSE`](LICENSE).
 
 ---
 
