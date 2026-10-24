@@ -89,7 +89,8 @@ if (-not $ScriptPath) {
     $ScriptPath = Join-Path $PSScriptRoot 'Check-Port22.ps1'
 }
 $ScriptPath = [System.IO.Path]::GetFullPath($ScriptPath)
-$baseline   = Join-Path (Split-Path $ScriptPath -Parent) 'tareas_baseline.txt'
+$dirBase    = Join-Path (Split-Path $ScriptPath -Parent) 'baseline'
+$configFile = Join-Path (Split-Path $ScriptPath -Parent) 'Radar.config.psd1'
 
 # ---------------------------------------------------------
 # Modo desinstalacion
@@ -112,10 +113,22 @@ if ($Uninstall) {
         Write-Aviso "La fuente '$source' no existia."
     }
 
+    $dirBaseUninstall = Join-Path (Split-Path $ScriptPath -Parent) 'baseline'
+    if (Test-Path -LiteralPath $dirBaseUninstall) {
+        Remove-Item -LiteralPath $dirBaseUninstall -Recurse -Force
+        Write-Ok "Lineas base eliminadas: $dirBaseUninstall"
+    }
+    $legacy = Join-Path (Split-Path $ScriptPath -Parent) 'tareas_baseline.txt'
+    if (Test-Path -LiteralPath $legacy) {
+        Remove-Item -LiteralPath $legacy -Force
+        Write-Ok "Baseline legacy eliminada: $legacy"
+    }
+
     Write-Host ""
-    Write-Host "Los archivos NO se borraron. Para eliminarlos manualmente:" -ForegroundColor Gray
+    Write-Host "Los scripts y la configuracion NO se borraron. Para eliminarlos manualmente:" -ForegroundColor Gray
     Write-Host "  Remove-Item '$ScriptPath'" -ForegroundColor Gray
-    Write-Host "  Remove-Item '$baseline'" -ForegroundColor Gray
+    Write-Host "  Remove-Item '$(Join-Path (Split-Path $ScriptPath -Parent) 'Install-Radar.ps1')'" -ForegroundColor Gray
+    Write-Host "  Remove-Item '$(Join-Path (Split-Path $ScriptPath -Parent) 'Radar.config.psd1')'" -ForegroundColor Gray
     return
 }
 
@@ -130,7 +143,7 @@ if (-not (Test-Path -LiteralPath $ScriptPath)) {
     exit 1
 }
 Write-Ok "Script principal: $ScriptPath"
-Write-Ok "Linea base de tareas: $baseline"
+Write-Ok "Linea base: $dirBase"
 
 try {
     $triggerDiario = New-ScheduledTaskTrigger -Daily -At $DailyAt
@@ -145,7 +158,15 @@ try {
 Write-Step "2/5 - Fuente del Event Log"
 
 if ([System.Diagnostics.EventLog]::SourceExists($source)) {
-    Write-Ok "La fuente '$source' ya existe. No se toca."
+    $logActual = ''
+    try { $logActual = [System.Diagnostics.EventLog]::LogNameFromSourceName($source, '.') } catch { }
+    if ($logActual -eq 'Application') {
+        Write-Ok "La fuente '$source' ya existe en Application. No se toca."
+    } else {
+        Write-Fail "La fuente '$source' existe pero en el log '$logActual', no en Application."
+        Write-Host "   Resolver a mano: Remove-EventLog -Source '$source' y volver a ejecutar." -ForegroundColor Gray
+        exit 1
+    }
 } else {
     New-EventLog -LogName Application -Source $source
     Write-Ok "Fuente '$source' creada en el log Application."
@@ -156,7 +177,28 @@ if ([System.Diagnostics.EventLog]::SourceExists($source)) {
 # ---------------------------------------------------------
 Write-Step "3/5 - Tarea programada"
 
-$argumentos = '-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "{0}"' -f $ScriptPath
+# Estado previo: si estaba pausada, se respeta; si estaba corriendo, se detiene
+$tareaPrevia = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+$pausada = [bool]($tareaPrevia -and $tareaPrevia.State -eq 'Disabled')
+if ($pausada) {
+    Write-Aviso "La tarea estaba PAUSADA: se reinstala y se deja pausada."
+}
+if ($tareaPrevia -and $tareaPrevia.State -eq 'Running') {
+    Write-Aviso "La tarea estaba corriendo: se detiene antes de reinstalar."
+    Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 2
+
+    # Si quedo un proceso colgado (por ejemplo un prompt sin consola), matarlo
+    if ((Get-ScheduledTask -TaskName $TaskName).State -eq 'Running') {
+        Write-Aviso "Sigue en ejecucion: terminando el proceso del radar."
+        Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
+            Where-Object { $_.CommandLine -like "*$ScriptPath*" } |
+            ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+        Start-Sleep -Seconds 1
+    }
+}
+
+$argumentos = '-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "{0}"' -f $ScriptPath
 $action = New-ScheduledTaskAction -Execute 'PowerShell.exe' -Argument $argumentos
 $triggers = @(
     $triggerDiario,
@@ -175,26 +217,37 @@ Register-ScheduledTask `
     -Settings $settings `
     -User "$env:USERDOMAIN\$env:USERNAME" `
     -RunLevel Highest `
-    -Description "Radar diario: puerto SSH 22, puertos expuestos y tareas programadas nuevas." `
+    -Description "Radar diario: SSH, puertos, tareas, Defender, firewall, RDP/WinRM e identidad." `
     -Force | Out-Null
 
 $tarea = Get-ScheduledTask -TaskName $TaskName
-Write-Ok "Tarea '$TaskName' creada/reemplazada."
+
+if ($pausada) {
+    Disable-ScheduledTask -TaskName $TaskName | Out-Null
+    Write-Ok "Tarea '$TaskName' creada/reemplazada y dejada PAUSADA (como estaba)."
+} else {
+    Write-Ok "Tarea '$TaskName' creada/reemplazada."
+}
 Write-Ok ("Triggers: {0} (diaria {1} + al iniciar sesion)" -f $tarea.Triggers.Count, $DailyAt)
 Write-Ok ("RunLevel: {0}" -f $tarea.Principal.RunLevel)
 
 # ---------------------------------------------------------
 # 4. Primera ejecucion (crea la linea base)
 # ---------------------------------------------------------
-if ($NoFirstRun) {
+if ($pausada) {
+    Write-Step "4/5 - Primera ejecucion OMITIDA (la tarea esta pausada)"
+    Write-Aviso "Para reanudar: Enable-ScheduledTask -TaskName '$TaskName'"
+} elseif ($NoFirstRun) {
     Write-Step "4/5 - Primera ejecucion OMITIDA (-NoFirstRun)"
     Write-Aviso "La linea base se creara en la proxima corrida programada."
 } else {
     Write-Step "4/5 - Primera ejecucion"
-    if (Test-Path -LiteralPath $baseline) {
-        Write-Aviso "Ya existe la linea base; se conserva la actual."
+    $hayBaseline = (Test-Path -LiteralPath $dirBase) -and
+        (@(Get-ChildItem -LiteralPath $dirBase -ErrorAction SilentlyContinue).Count -gt 0)
+    if ($hayBaseline) {
+        Write-Aviso "Ya existen lineas base; se conservan las actuales."
     } else {
-        Write-Aviso "Se creara la linea base con las tareas actuales (no alerta en esta corrida)."
+        Write-Aviso "Se crearan las lineas base con el estado actual (no alerta en esta corrida)."
     }
     & $ScriptPath
 }
@@ -204,14 +257,24 @@ if ($NoFirstRun) {
 # ---------------------------------------------------------
 Write-Step "5/5 - Verificacion"
 
-if ($NoFirstRun) {
+if ($pausada) {
+    Write-Step "5/5 - Verificacion OMITIDA (la tarea esta pausada)"
+} elseif ($NoFirstRun) {
     Write-Aviso "Verificacion de ejecucion omitida. Probar con: Start-ScheduledTask -TaskName '$TaskName'"
 } else {
     Start-ScheduledTask -TaskName $TaskName
-    Start-Sleep -Seconds 5
+
+    # Esperar a que termine (el radar puede tardar varios segundos)
+    $limite = (Get-Date).AddSeconds(90)
+    do {
+        Start-Sleep -Seconds 2
+        $estado = (Get-ScheduledTask -TaskName $TaskName).State
+    } while (($estado -eq 'Running' -or $estado -eq 'Queued') -and (Get-Date) -lt $limite)
 
     $info = Get-ScheduledTaskInfo -TaskName $TaskName
-    if ($info.LastTaskResult -eq 0) {
+    if ($estado -eq 'Running') {
+        Write-Aviso "La tarea sigue corriendo despues de 90s. Revisar el Visor de Eventos."
+    } elseif ($info.LastTaskResult -eq 0) {
         Write-Ok "La tarea corrio sin errores (LastTaskResult = 0)."
     } else {
         Write-Aviso "LastTaskResult = $($info.LastTaskResult). Revisar el Visor de Eventos."
@@ -234,12 +297,17 @@ Write-Host "Instalacion completa." -ForegroundColor Green
 Write-Host "  Script   : $ScriptPath"
 Write-Host "  Tarea    : $TaskName"
 Write-Host "  Horario  : diaria $DailyAt + al iniciar sesion"
-Write-Host "  Baseline : $baseline"
+if ($pausada) {
+    Write-Host "  Estado   : PAUSADA (reanudar con Enable-ScheduledTask -TaskName '$TaskName')" -ForegroundColor Yellow
+}
+Write-Host "  Baseline : $dirBase"
+Write-Host "  Config   : $configFile"
 Write-Host ""
 Write-Host "Comandos utiles:" -ForegroundColor Cyan
 Write-Cmd "& '$ScriptPath'"                                          "correr el radar ahora"
-Write-Cmd "& '$ScriptPath' -AprobarTareas"                           "aceptar tareas nuevas como conocidas"
+Write-Cmd "& '$ScriptPath' -AprobarBaselines"                        "aceptar novedades como conocidas"
+Write-Cmd "& '$ScriptPath' -AprobarTareas"                           "aceptar solo tareas nuevas"
 Write-Cmd "Start-ScheduledTask -TaskName '$TaskName'"                "forzar la tarea"
 Write-Cmd "Get-EventLog -LogName Application -Source '$source' -Newest 5"
-Write-Cmd ".\Install-Radar.ps1 -Uninstall"                           "quitar tarea y fuente de log"
+Write-Cmd ".\Install-Radar.ps1 -Uninstall"                           "quitar tarea, fuente y baselines"
 Write-Host ""

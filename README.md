@@ -1,43 +1,49 @@
-# Radar de Seguridad - Windows 11
+# Radar de Seguridad - Windows 11 (fase 1)
 
-Monitoreo diario y automatico de la superficie de ataque basica de un equipo Windows 11:
+Monitoreo diario de la superficie de ataque de un equipo Windows 11:
 
 1. **Puerto 22 (SSH)** abierto o servicio `sshd` instalado.
-2. **Puertos escuchando en la red** (`0.0.0.0` / `::`) abiertos por procesos que no son del sistema.
-3. **Tareas programadas nuevas** respecto a una linea base conocida (persistencia tipica de malware).
+2. **Puertos escuchando en la red** (`0.0.0.0` / `::`) por procesos no habituales.
+3. **Tareas programadas nuevas** respecto a una linea base.
+4. **Microsoft Defender**: proteccion en tiempo real, firmas, manipulacion, amenazas activas y exclusiones.
+5. **Firewall**: perfiles apagados o permisivos, y reglas de entrada nuevas expuestas.
+6. **Acceso remoto**: RDP y WinRM habilitados sin querer.
+7. **Identidad**: administradores/usuarios locales nuevos, cuentas integradas, autologon, UAC y WDigest.
 
-Cuando algo cambia: **popup en pantalla** + **evento en el Visor de Eventos**.
+Cuando algo cambia: **evento en el Visor de Eventos** y, si es **critico**, **popup en pantalla**.
 
-> El script **detecta y avisa**, no bloquea. La mitigacion (cerrar puerto, deshabilitar servicio, borrar tarea) la haces tu con los comandos de la seccion [Que hacer cuando salta una alerta](#5-que-hacer-cuando-salta-una-alerta).
+> El script **detecta y avisa**, no bloquea. La accion correctiva es tuya (seccion 5).
+> Fase 1 cubre Defender, Firewall, RDP/WinRM e Identidad. Persistencia avanzada, red y eventos (4625/1102) quedan para la fase 2.
 
 ---
 
 ## 0. Resumen: orden de instalacion
 
-> **Camino rapido (recomendado):** copia `Check-Port22.ps1` + `Install-Radar.ps1` a una carpeta y ejecuta
+> **Camino rapido (recomendado):** copia `Check-Port22.ps1` + `Install-Radar.ps1` (+ `Radar.config.psd1`) a una carpeta y ejecuta
 > `powershell -ExecutionPolicy Bypass -File .\Install-Radar.ps1`
 >
-> Ese unico comando hace los pasos 2 a 5 (fuente del Event Log + tarea + primera corrida + verificacion) y se auto-eleva pidiendo UAC. La tabla y los pasos manuales de abajo son el equivalente detallado, utiles para entender o para reparar a mano.
+> Ese unico comando hace los pasos 2 a 5 (fuente del Event Log + tarea + primera corrida + verificacion) y se auto-eleva pidiendo UAC.
 
 | # | Paso | Necesita Administrador |
 |---|------|------------------------|
-| 1 | Crear `C:\Scripts` y copiar `Check-Port22.ps1` (UTF-8 con BOM) | No |
+| 1 | Crear la carpeta y copiar los archivos (UTF-8 con BOM) | No |
 | 2 | Registrar la fuente del Event Log `Seguridad-Port22` | **Si** (solo una vez) |
-| 3 | Probar el script a mano | No |
+| 3 | Probar el script a mano (`-SinPopup`) | No* |
 | 4 | Crear la Tarea Programada | **Si** |
 | 5 | Verificar de punta a punta | No |
 | 6 | (Opcional) Endurecer firewall / servicios | **Si** |
 
-Si te salteas el paso 2, el script igual funciona pero **no deja registro** en el Visor de Eventos (avisa por consola y sigue).
+\* Sin Administrador el script funciona, pero **omite los chequeos con linea base** (tareas, exclusiones de Defender, reglas de firewall, identidad) y las amenazas activas, porque la vista del sistema cambia con el privilegio. Lo avisa por consola. La tarea programada corre elevada, asi que el chequeo completo es automatico.
 
 ---
 
 ## 1. Requisitos
 
-- Windows 11 (funciona en Windows 10 1809+).
+- Windows 11 (tambien Windows 10 1809+).
 - Windows PowerShell 5.1 (el que viene con Windows). No requiere PowerShell 7.
-- Permisos de Administrador **solo** para: registrar la fuente del Event Log y crear la tarea programada.
-- El usuario que ejecuta el script debe tener **sesion iniciada** para ver el popup (la tarea corre en modo interactivo).
+- Administrador para: registrar la fuente del Event Log, crear la tarea programada y ejecutar los chequeos con linea base.
+- Los chequeos con linea base (tareas, exclusiones de Defender, reglas de firewall, identidad) y las amenazas activas **solo corren elevados**, igual que la tarea programada. Sin Administrador el script hace solo los chequeos de estado y lo avisa por consola.
+- El usuario debe tener **sesion iniciada** para ver el popup (la tarea corre en modo interactivo).
 
 ---
 
@@ -45,22 +51,24 @@ Si te salteas el paso 2, el script igual funciona pero **no deja registro** en e
 
 | Archivo | Que es | Se regenera |
 |---------|--------|-------------|
-| `C:\Scripts\Check-Port22.ps1` | Script principal (radar). Es el unico imprescindible. | No |
-| `C:\Scripts\Install-Radar.ps1` | Instalador/desinstalador automatico. | No |
-| `C:\Scripts\README.md` | Este documento. | No |
-| `C:\Scripts\tareas_baseline.txt` | Lista de tareas programadas "conocidas". La crea el script en la **primera ejecucion**. | Si (en cada ejecucion sin novedades) |
-| `C:\Scripts\Firewall.md` | Comando opcional de endurecimiento del firewall. | No |
-| `C:\Scripts\Tareas_Referencia.txt` | **Obsoleto** (version vieja del control de tareas). Se puede borrar. | No |
+| `Check-Port22.ps1` | Radar principal (los 7 chequeos). | No |
+| `Install-Radar.ps1` | Instalador/desinstalador automatico. | No |
+| `Radar.config.psd1` | Configuracion: umbrales, estados aceptados, whitelists. | No |
+| `README.md` | Este documento. | No |
+| `baseline\*.json` | Lineas base por chequeo (se crean solas). | Si |
+| `tareas_baseline.txt` | **Legacy**: se migra automaticamente a `baseline\tareas.json`. Se puede borrar. | No |
+| `Firewall.md` | Comando opcional de endurecimiento. | No |
+| `Tareas_Referencia.txt` | **Obsoleto** (version vieja). Se puede borrar. | No |
 
-> No edites `tareas_baseline.txt` a mano salvo que quieras reiniciar el control de tareas (ver [Mantenimiento](#8-mantenimiento)).
+> Las rutas son relativas al script (`$PSScriptRoot`), asi que el proyecto funciona en cualquier carpeta.
 
 ---
 
-## 3. Instalacion paso a paso
+## 3. Instalacion
 
 ### 3.0 - Instalacion automatica (recomendada)
 
-Copia a una carpeta `Check-Port22.ps1` e `Install-Radar.ps1`, y ejecuta:
+Copia `Check-Port22.ps1`, `Install-Radar.ps1` y `Radar.config.psd1` a una carpeta y ejecuta:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\Install-Radar.ps1
@@ -69,59 +77,64 @@ powershell -ExecutionPolicy Bypass -File .\Install-Radar.ps1
 El instalador:
 
 1. Se auto-eleva (UAC) si no esta como Administrador.
-2. Verifica que exista `Check-Port22.ps1` al lado.
+2. Verifica que exista `Check-Port22.ps1`.
 3. Registra la fuente `Seguridad-Port22` (si ya existe, no la toca).
 4. Crea o reemplaza la tarea programada (diaria 00:00 + al iniciar sesion, `Highest`, `Interactive`).
-5. Ejecuta el radar por primera vez (crea `tareas_baseline.txt`).
+5. Ejecuta el radar por primera vez (crea todas las lineas base).
 6. Verifica: `LastTaskResult = 0` y evento reciente en el Visor.
 
 Es **idempotente**: se puede volver a correr para reparar o reconfigurar sin duplicar nada.
-
-Opciones:
 
 | Parametro | Default | Para que |
 |-----------|---------|----------|
 | `-DailyAt "11:00PM"` | `12:00AM` | Cambiar la hora de la corrida diaria. |
 | `-TaskName "..."` | `Seguridad - Revision Puerto SSH` | Otro nombre de tarea. |
 | `-ScriptPath "..."` | `Check-Port22.ps1` junto al instalador | Script en otra ruta. |
-| `-NoFirstRun` | (apagado) | Instalar sin ejecutar ni crear la linea base. |
-| `-Uninstall` | (apagado) | Quitar la tarea y la fuente del Event Log. |
+| `-NoFirstRun` | (apagado) | Instalar sin ejecutar ni crear lineas base. |
+| `-Uninstall` | (apagado) | Quitar tarea, fuente de Event Log y lineas base. |
 
 ```powershell
-# Ejemplos
 .\Install-Radar.ps1 -DailyAt "11:00PM"
 .\Install-Radar.ps1 -Uninstall
 ```
 
 > Si no ves la ventana del instalador, es porque se relanzo elevado en otra consola: acepta el UAC y mira esa ventana.
 
-Los pasos manuales de abajo son el equivalente detallado (utiles para entender que hace cada cosa o para reparar a mano).
+### Idempotencia y reinstalacion
 
-### Paso 1 - Crear la carpeta y el script
+Se puede correr las veces que quieras: el estado final es el mismo.
 
-Abre PowerShell normal (no hace falta admin) y ejecuta:
+| Operacion | Comportamiento |
+|-----------|----------------|
+| Fuente `Seguridad-Port22` | Si ya existe en `Application`, no se toca. Si existiera en otro log, aborta con mensaje. |
+| Tarea programada | Se reemplaza con `-Force` (mismo nombre, sin duplicados). |
+| Lineas base | Se conservan si existen; se crean si faltan. |
+| Tarea **pausada** | Se reinstala y se **deja pausada**; no se ejecuta ni se verifica. |
+| Tarea corriendo | Se detiene antes de reinstalar. |
+| Eventos | Cada corrida agrega 2 eventos (ejecucion manual + prueba de la tarea). Es normal. |
+| Historial de la tarea | `-Force` lo reinicia; la verificacion lo vuelve a poblar. |
+| Cambiar `-TaskName` | Crea otra tarea; la anterior queda y hay que borrarla a mano. |
+| `-Uninstall` repetido | La segunda vez avisa que ya no existe; no falla. |
+
+Lo unico que **no** es idempotente es el tiempo: cada ejecucion agrega eventos al Visor y, si hay criticos, muestra popup. Los pasos manuales que siguen son el equivalente detallado del instalador (utiles para entender o reparar a mano).
+
+### Paso 1 - Crear la carpeta y copiar los archivos
 
 ```powershell
 New-Item -ItemType Directory -Force -Path "C:\Scripts" | Out-Null
 ```
 
-Copia `Check-Port22.ps1` a `C:\Scripts\`. Si lo creas a mano, **debe guardarse en UTF-8 con BOM**, si no PowerShell falla con errores de parseo por los acentos.
-
-En VS Code: clic en la codificacion de la barra inferior derecha -> **Save with Encoding** -> **UTF-8 with BOM**.
-En Notepad: **Guardar como** -> Codificacion: **UTF-8 con BOM**.
-
-Verifica que quedo bien (debe imprimir `239 187 191`):
+Copia `Check-Port22.ps1` a `C:\Scripts\`. Si lo creas a mano, **debe guardarse en UTF-8 con BOM**:
 
 ```powershell
 $b = [System.IO.File]::ReadAllBytes("C:\Scripts\Check-Port22.ps1")
-"{0} {1} {2}" -f $b[0], $b[1], $b[2]
+"{0} {1} {2}" -f $b[0], $b[1], $b[2]   # debe imprimir 239 187 191
 ```
 
-> El script no tiene acentos a proposito, pero el BOM evita problemas si mas adelante lo editas.
+En VS Code: clic en la codificacion (barra inferior) -> **Save with Encoding** -> **UTF-8 with BOM**.
+En Notepad: **Guardar como** -> Codificacion: **UTF-8 con BOM**.
 
 ### Paso 2 - Registrar la fuente del Event Log (Administrador)
-
-**PowerShell como Administrador**, una sola vez por equipo:
 
 ```powershell
 if (-not (Get-EventLog -LogName Application -Source "Seguridad-Port22" -ErrorAction SilentlyContinue)) {
@@ -132,90 +145,69 @@ if (-not (Get-EventLog -LogName Application -Source "Seguridad-Port22" -ErrorAct
 }
 ```
 
-Resultado esperado: `Fuente 'Seguridad-Port22' creada correctamente.`
+### Paso 3 - Primera ejecucion (Administrador)
 
-> El nombre `Seguridad-Port22` se mantiene por compatibilidad con la tarea existente. El ID de evento y la fuente no cambian.
-
-### Paso 3 - Primera ejecucion (crea la linea base)
-
-PowerShell normal:
+Con PowerShell **como Administrador** (igual que la tarea, para que las lineas base se creen con la vista completa):
 
 ```powershell
-& "C:\Scripts\Check-Port22.ps1"
+& "C:\Scripts\Check-Port22.ps1" -SinPopup
 ```
 
-Resultado esperado:
+Resultado esperado en un equipo limpio (la primera vez):
 
 ```text
-PRIMERA EJECUCION: linea base de tareas creada en C:\Scripts\tareas_baseline.txt
-RADAR OK: Sin amenazas detectadas.
+[i] Tareas: Linea base creada (262 tareas).
+[i] Defender: Linea base de exclusiones creada (0 entradas).
+[i] Firewall: Linea base de reglas de entrada creada (229 reglas).
+[i] Identidad: Linea base de administradores creada (2 miembros).
+[i] Identidad: Linea base de usuarios locales creada (5 cuentas).
+RADAR OK: sin amenazas detectadas (5 informativos).
 ```
 
-Que paso:
+Los mensajes `[i] ... Linea base creada` son normales y no alertan: es el punto de partida.
+Si en cambio ves `[i] Sin Administrador: se omiten los chequeos con linea base...`, la consola no esta elevada: los chequeos de estado se hicieron, pero no se crearon lineas base.
 
-- Se creo `tareas_baseline.txt` con **todas** las tareas actuales (incluidas las de Windows, AMD, Proton, etc.). No hay alerta de tareas en esta corrida: es intencional.
-- Se registro un evento **ID 1000 (Information)** en el Visor de Eventos.
-
-Si en este punto ves `ADVERTENCIA: Puertos expuestos por procesos no habituales`, mira [Puertos no habituales](#puertos-no-habituales).
+> **Regla de oro:** las lineas base se crean y actualizan **solo** en corridas elevadas. Correr el script sin Administrador nunca las modifica (asi una vista parcial no puede generar falsas alertas despues).
 
 ### Paso 4 - Crear la Tarea Programada (Administrador)
 
-**PowerShell como Administrador**:
-
 ```powershell
-# Triggers: diario a medianoche + al iniciar sesion
 $t1 = New-ScheduledTaskTrigger -Daily -At "12:00AM"
 $t2 = New-ScheduledTaskTrigger -AtLogOn
 
-# Accion: PowerShell oculto ejecutando el script
 $action = New-ScheduledTaskAction -Execute "PowerShell.exe" `
-    -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"C:\Scripts\Check-Port22.ps1`""
+    -Argument "-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File `"C:\Scripts\Check-Port22.ps1`""
 
-# Settings
 $settings = New-ScheduledTaskSettingsSet `
     -AllowStartIfOnBatteries `
     -DontStopIfGoingOnBatteries `
-    -StartWhenAvailable
+    -StartWhenAvailable `
+    -ExecutionTimeLimit (New-TimeSpan -Minutes 60)
 
-# Registrar
 Register-ScheduledTask -TaskName "Seguridad - Revision Puerto SSH" `
     -Action $action `
     -Trigger $t1, $t2 `
     -Settings $settings `
     -User "$env:USERDOMAIN\$env:USERNAME" `
     -RunLevel Highest `
-    -Description "Radar diario: puerto SSH 22, puertos expuestos y tareas nuevas." `
+    -Description "Radar diario: SSH, puertos, tareas, Defender, firewall, RDP/WinRM e identidad." `
     -Force
 ```
 
-Detalles que importan:
-
 | Parametro | Para que |
 |-----------|----------|
-| `-WindowStyle Hidden` | No abre consola negra; solo aparece el popup si hay alerta. |
-| `-ExecutionPolicy Bypass` | Evita el error de "ejecucion de scripts deshabilitada". |
-| `-User ...` + `RunLevel Highest` | Corre en tu sesion (necesario para que el popup sea visible) y con permisos suficientes para escribir el Event Log. |
-| `-StartWhenAvailable` | Si a medianoche el equipo estaba apagado, corre al encender. |
-| `-Force` | Sobrescribe la tarea si ya existia (reinstalacion). |
-
-Verificar que quedo bien:
-
-```powershell
-Get-ScheduledTask -TaskName "Seguridad - Revision Puerto SSH" |
-    Select-Object TaskName, State
-
-Get-ScheduledTask -TaskName "Seguridad - Revision Puerto SSH" |
-    Select-Object -ExpandProperty Triggers |
-    Format-Table StartBoundary, DaysInterval, Enabled -AutoSize
-```
-
-Debe haber **dos** triggers: uno diario (00:00, cada 1 dia) y uno al inicio de sesion.
+| `-WindowStyle Hidden` | No abre consola negra; solo aparece el popup si hay criticals. |
+| `-NonInteractive` | Si algun comando pidiera confirmacion, falla en vez de dejar la tarea oculta colgada esperando. |
+| `-ExecutionPolicy Bypass` | Evita "ejecucion de scripts deshabilitada". |
+| `-User ...` + `RunLevel Highest` | Corre en tu sesion (popup visible) y con permisos para el Event Log y las exclusiones de Defender. |
+| `-StartWhenAvailable` | Si a medianoche estaba apagado, corre al encender. |
+| `-ExecutionTimeLimit 60` | Si un popup queda abierto, la tarea no queda colgada para siempre. |
 
 ### Paso 5 - Verificacion de punta a punta
 
 ```powershell
 Start-ScheduledTask -TaskName "Seguridad - Revision Puerto SSH"
-Start-Sleep -Seconds 5
+Start-Sleep -Seconds 8
 
 Get-ScheduledTaskInfo -TaskName "Seguridad - Revision Puerto SSH" |
     Select-Object LastRunTime, LastTaskResult, NextRunTime
@@ -224,32 +216,30 @@ Get-EventLog -LogName Application -Source "Seguridad-Port22" -Newest 1 |
     Format-List TimeGenerated, EntryType, EventId, Message
 ```
 
-- `LastTaskResult : 0` = la tarea corrio sin error.
-- El evento mas reciente debe tener la hora actual.
+- `LastTaskResult : 0` = corrio sin error.
+- El evento debe tener la hora actual.
 
 ### Paso 6 - (Opcional) Endurecimiento
-
-El firewall ya viene bloqueando entradas no solicitadas. Si quieres forzarlo de forma explicita (contenido de `Firewall.md`):
 
 ```powershell
 Set-NetFirewallProfile -Profile Domain,Public,Private `
     -DefaultInboundAction Block -DefaultOutboundAction Allow
 ```
 
-Para revertir a los valores por defecto:
+Revertir:
 
 ```powershell
 Set-NetFirewallProfile -Profile Domain,Public,Private `
     -DefaultInboundAction NotConfigured -DefaultOutboundAction NotConfigured
 ```
 
-Otras medidas opcionales aplicadas en este equipo (documentadas por si hay que reinstalar):
+Otras medidas opcionales (no son requisito del radar):
 
 ```powershell
-# SMBv1 (protocolo viejo, vector de ransomware)
+# SMBv1
 Disable-WindowsOptionalFeature -Online -FeatureName SMB1Protocol -NoRestart
 
-# Cola de impresion (si no se usan impresoras) - cierra los puertos dinamicos del spooler
+# Cola de impresion (si no se imprimen documentos)
 Set-Service -Name Spooler -StartupType Disabled
 Stop-Service -Name Spooler -Force
 
@@ -260,170 +250,260 @@ Set-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell\Scr
 auditpol /set /subcategory:"Process Creation" /success:enable
 ```
 
-> Todas estas son **opcionales** para que el radar funcione. Ninguna es requisito.
-
 ---
 
-## 4. Como funciona el script
+## 4. Que revisa
 
-Variables configurables al inicio de `Check-Port22.ps1`:
+| Area | Detecta | Severidad | Usa baseline |
+|------|---------|-----------|--------------|
+| SSH | Puerto 22 escuchando / servicio `sshd` | Critico / Aviso | No |
+| Puertos | Procesos no habituales escuchando en red | Aviso | No (whitelist) |
+| Tareas | Tareas programadas nuevas | Aviso | **Si** |
+| Defender | RTP apagado, amenazas activas | Critico | No |
+| Defender | Modo pasivo, tamper off, firmas viejas | Aviso | No |
+| Defender | Exclusiones nuevas | Critico | **Si** |
+| Firewall | Perfil apagado o entradas permitidas por defecto | Critico | No |
+| Firewall | Reglas de entrada nuevas expuestas (Any/Public) | Critico | **Si** |
+| RDP | Escritorio Remoto habilitado | Critico* | No |
+| RDP | NLA off / puerto no estandar | Aviso | No |
+| WinRM | Servicio corriendo | Critico* | No |
+| WinRM | Arranque Automatico (se iniciaria al reiniciar) | Aviso | No |
+| Identidad | Nuevos administradores locales | Critico | **Si** |
+| Identidad | Cuentas locales nuevas o modificadas | Critico | **Si** |
+| Identidad | Guest o Administrator integrado habilitados | Aviso | No |
+| Identidad | Autologon con contrasena, UAC off, WDigest = 1 | Critico | No |
 
-| Variable | Default | Significado |
-|----------|---------|-------------|
-| `$eventoLog` | `Seguridad-Port22` | Fuente del Event Log. |
-| `$logType` | `Application` | Log de destino. |
-| `$refTareas` | Join-Path $PSScriptRoot "tareas_baseline.txt" | Linea base de tareas. |
-| `$procesosPermitidos` | lista | Procesos que pueden escuchar en la red sin alertar. |
+\* Se puede aceptar como estado conocido con `Aceptados.RDP` / `Aceptados.WinRM` en la config (pasa a informativo).
 
-### Revision 1 - Puerto 22
+### Detalle
 
-- Alerta **CRITICO** si algo escucha en el puerto 22.
-- Alerta **ADVERTENCIA** si el servicio `sshd` existe aunque este detenido (senal de que alguien lo instalo).
+**SSH.** Critico si algo escucha en 22. Aviso si el servicio `sshd` existe aunque este detenido (senal de instalacion no deseada).
 
-### Revision 2 - Puertos expuestos
+**Puertos.** Lista lo que escucha en `0.0.0.0` / `::`, resuelve el proceso dueno y descarta los de `ProcesosPermitidos`. Para sumar uno legitimo, editalo en `Radar.config.psd1`.
 
-Lista todo lo que escucha en `0.0.0.0` o `::`, resuelve el proceso dueno y **descarta** los que estan en `$procesosPermitidos` (`svchost`, `lsass`, `System`, `dwm`, `vmms`, etc.).
+**Tareas.** Baseline con ruta y nombre de cada tarea. Alerta solo por las que no existian. Si aparece una legitima (actualizacion de un programa), se acepta con `-AprobarTareas` o `-AprobarBaselines`.
 
-Para sumar un proceso legitimo, edita la lista:
+**Defender.**
+- `RealTimeProtectionEnabled = False` (y sin antivirus de terceros en modo pasivo) -> **Critico**.
+- `AMRunningMode` pasivo -> Aviso (hay otro AV).
+- `IsTamperProtected = False` -> Aviso.
+- `AntivirusSignatureAge` > `DiasFirmaDefender` (default 4) -> Aviso.
+- `Get-MpThreat` con amenazas activas -> **Critico**.
+- Exclusiones nuevas respecto a la baseline -> **Critico** (tecnica clasica para que el AV ignore una carpeta).
+
+**Firewall.**
+- Cualquier perfil con `Enabled = False` -> **Critico**.
+- Cualquier perfil con `DefaultInboundAction = Allow` -> **Critico**.
+- Reglas de entrada `Allow` + `Enabled` + remoto `Any` + perfil `Public`/`Any` nuevas -> **Critico** (expuestas a la red).
+
+**RDP / WinRM.**
+- `fDenyTSConnections = 0` -> RDP habilitado (**Critico**).
+- `UserAuthentication = 0` -> RDP sin NLA (Aviso).
+- `WinRM` corriendo o escuchando en 5985/5986 -> **Critico**.
+- `WinRM` con arranque Automatico pero detenido -> Aviso. (El default de Windows, Manual y detenido, **no** alerta.)
+- El chequeo **no usa** el proveedor `WSMan:\`: al accederlo, PowerShell ofrece iniciar el servicio WinRM y en la tarea oculta quedaria esperando respuesta.
+
+**Identidad.**
+- Nuevo miembro en Administradores locales (comparado por SID, funciona en Windows en espanol) -> **Critico**.
+- Cuenta local nueva o con estado cambiado (habilitada/deshabilitada) -> **Critico**.
+- Guest habilitado -> Aviso. Administrator integrado habilitado -> Aviso.
+- `Winlogon\DefaultPassword` presente -> **Critico** (contrasena en texto plano).
+- `EnableLUA != 1` -> **Critico** (UAC apagado).
+- `WDigest\UseLogonCredential = 1` -> **Critico** (credenciales recuperables de memoria).
+
+### Severidades, eventos y popup
+
+| Resultado | Evento | ID | Popup |
+|-----------|--------|----|-------|
+| Sin hallazgos | Information | 1000 | No |
+| Solo avisos | Warning | 1002 | No (por defecto) |
+| Al menos un critico | Error | 1001 | **Si** |
+
+El popup muestra los criticos y el conteo de avisos. Los avisos siempre quedan en el Visor de Eventos.
+Si queres popup tambien para avisos, cambia en `Radar.config.psd1`:
 
 ```powershell
-$procesosPermitidos = @(
-    'svchost','lsass','System','smss','csrss','services','wininit','winlogon',
-    'dwm','RuntimeBroker','SearchIndexer','MsMpEng','NisSrv','vmms'
-    #,'MiPrograma'
-)
+PopupSoloCritico = $false
 ```
 
-<b id="puertos-no-habituales"></b>
+### Configuracion (`Radar.config.psd1`)
 
-#### Puertos no habituales
+| Clave | Default | Significado |
+|-------|---------|-------------|
+| `PopupSoloCritico` | `$true` | Solo criticos abren popup. |
+| `Umbrales.DiasFirmaDefender` | `4` | Dias maximos de antiguedad de firmas. |
+| `Aceptados.RDP` | `$false` | `$true` si usas Escritorio Remoto a proposito. |
+| `Aceptados.WinRM` | `$false` | `$true` si usas WinRM a proposito. |
+| `ProcesosPermitidos` | lista | Procesos que pueden escuchar en red sin aviso. |
+| `Ignorar.ReglasFirewall` | `@()` | Nombres tecnicos de reglas a no vigilar. |
 
-Si aparece un puerto:
+Si el archivo falta o es invalido, el script usa los valores por defecto (avisa por consola).
 
-```powershell
-$p = Get-NetTCPConnection -LocalPort <PUERTO> -State Listen
-Get-Process -Id $p.OwningProcess | Select-Object Id, Name, Path
-```
+### Lineas base
 
-- Si es un programa que instalaste y necesitas -> agrega su proceso a `$procesosPermitidos`.
-- Si no lo reconoces -> deshabilita el servicio (`Set-Service -Name <servicio> -StartupType Disabled; Stop-Service <servicio> -Force`) o desinstala el programa.
+Se guardan en `baseline\` junto al script:
 
-Casos tipicos ya vistos en este equipo:
+| Archivo | Contenido |
+|---------|-----------|
+| `tareas.json` | Ruta + nombre de cada tarea programada |
+| `defender-exclusiones.json` | Exclusiones de Defender por tipo |
+| `firewall-reglas.json` | Reglas de entrada permitidas expuestas |
+| `identidad-admins.json` | Miembros de Administradores (SID) |
+| `identidad-usuarios.json` | Cuentas locales y su estado |
 
-| Puerto | Proceso | Que es | Decision |
-|--------|---------|--------|----------|
-| 2179 | `vmms` | Hyper-V Management | Deshabilitar si no se usa Hyper-V/WSL2/Docker; si se usa, esta en la lista blanca. |
-| 49668 | `spoolsv` | Print Spooler | Se deshabilito el servicio (ya no aparece). |
+Reglas de actualizacion:
 
-### Revision 3 - Tareas nuevas (linea base)
-
-- La **primera** ejecucion guarda todas las tareas actuales en `tareas_baseline.txt` y no alerta.
-- Las siguientes ejecuciones comparan la lista actual contra la linea base y alertan **solo por las que no existian**.
-- La linea base **solo se actualiza** si no hay tareas nuevas (o si corres con `-AprobarTareas`).
-
-Consecuencia util: si aparece una tarea nueva, **te va a alertar todos los dias** hasta que la revises y la aceptes o la elimines.
-
-```powershell
-# Revisar y aceptar las tareas nuevas como conocidas
-& "C:\Scripts\Check-Port22.ps1" -AprobarTareas
-```
-
-### Resultado y registro
-
-| Resultado | Evento | ID | Consola |
-|-----------|--------|----|---------|
-| Todo normal | Information | 1000 | `RADAR OK: Sin amenazas detectadas.` |
-| Hay alertas | Error | 1001 | `ALERTAS GENERADAS:` + detalle + popup |
+- Solo se crean/actualizan en corridas **elevadas** (la tarea o el instalador). Sin Administrador ni se leen ni se escriben.
+- Si el archivo **no existe**: se crea en silencio (primera corrida elevada).
+- Si **no hay novedades**: se refresca sola (asi los borrados no generan ruido).
+- Si **hay novedades**: alerta y **no** se actualiza. Te va a avisar todos los dias hasta que actues o aceptes.
+- Con `-AprobarBaselines`: acepta todo y no alerta en esa corrida.
 
 ---
 
 ## 5. Que hacer cuando salta una alerta
 
-### "CRITICO: Puerto 22 (SSH) ABIERTO y escuchando"
+### SSH abierto
 
 ```powershell
-# Quien esta escuchando
 Get-NetTCPConnection -LocalPort 22 -State Listen | Select-Object LocalAddress, OwningProcess
 Get-Process -Id (Get-NetTCPConnection -LocalPort 22 -State Listen).OwningProcess | Select-Object Name, Path
 
-# Si es OpenSSH Server: detener y deshabilitar
 Stop-Service -Name sshd -Force
 Set-Service  -Name sshd -StartupType Disabled
 
-# Si no lo necesitas, desinstalarlo
+# Si no lo necesitas
 Get-WindowsCapability -Online -Name "OpenSSH.Server*" | Select-Object Name, State
 Remove-WindowsCapability -Online -Name "OpenSSH.Server~~~~0.0.1.0"
 ```
 
-### "ADVERTENCIA: servicio sshd instalado"
-
-Alguien (o una herramienta) instalo el servidor SSH. Si no lo usas: `Remove-WindowsCapability` como arriba. Si lo usas: el aceptarlo es decision tuya, pero el radar seguira avisando (es intencional).
-
-### "ADVERTENCIA: Puertos expuestos por procesos no habituales"
-
-Ver [Puertos no habituales](#puertos-no-habituales).
-
-### "REVISION: Tareas programadas nuevas"
+### Defender en rojo
 
 ```powershell
-# Ver que hace la tarea (ruta completa, con barra inicial)
-$t = Get-ScheduledTask -TaskPath "\" -TaskName "<NOMBRE>"
+Get-MpComputerStatus | Select RealTimeProtectionEnabled, AntivirusSignatureAge, AMRunningMode, IsTamperProtected
+Set-MpPreference -DisableRealtimeMonitoring $false
+Update-MpSignature
+Start-MpScan -ScanType QuickScan
+Get-MpThreat | Where-Object IsActive | Select ThreatName, SeverityID, Resources
+```
 
+Si `IsTamperProtected` esta en False, activalo en Seguridad de Windows -> Proteccion antivirus -> Administrar la configuracion.
+Si aparecen **exclusiones nuevas** que no agregaste vos, revisa la ruta excluida antes de borrarla:
+
+```powershell
+(Get-MpPreference).ExclusionPath
+Remove-MpPreference -ExclusionPath "<ruta>"
+```
+
+### Firewall en rojo
+
+```powershell
+Get-NetFirewallProfile | Select Name, Enabled, DefaultInboundAction
+Set-NetFirewallProfile -Profile Domain,Public,Private -Enabled True -DefaultInboundAction Block
+```
+
+Regla nueva expuesta:
+
+```powershell
+Get-NetFirewallRule -Direction Inbound -Enabled True -Action Allow |
+    Where-Object { ($_.RemoteAddress -join ',') -eq '' -and "$($_.Profile)" -match 'Public|Any' } |
+    Select-Object DisplayName, Name, Profile
+```
+
+Si no la reconoces: `Disable-NetFirewallRule -Name "<Name>"`.
+Si es legitima: `& "C:\Scripts\Check-Port22.ps1" -AprobarBaselines`.
+
+### RDP / WinRM habilitados sin querer
+
+```powershell
+# Deshabilitar RDP
+Set-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server' -Name fDenyTSConnections -Value 1
+
+# Deshabilitar WinRM
+Stop-Service WinRM -Force
+Set-Service WinRM -StartupType Disabled
+```
+
+Si los usas a proposito, evita el criticos eternos:
+
+```powershell
+# En Radar.config.psd1
+Aceptados = @{ RDP = $true; WinRM = $false }
+```
+
+### Identidad
+
+```powershell
+# Quien esta en Administradores
+Get-LocalGroup -SID 'S-1-5-32-544' | Get-LocalGroupMember | Select Name, ObjectClass, PrincipalSource
+
+# Cuentas y estado
+Get-LocalUser | Select Name, Enabled, PasswordRequired, PasswordLastSet, LastLogon
+
+# Autologon en texto plano
+Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon' | Select DefaultUserName, DefaultPassword
+```
+
+Quitar un administrador: `Remove-LocalGroupMember -SID 'S-1-5-32-544' -Member '<nombre>'`.
+Deshabilitar cuenta: `Disable-LocalUser -Name '<nombre>'`.
+Quitar contrasena de autologon: borrar el valor `DefaultPassword` y, si no lo usas, `AutoAdminLogon = 0`.
+
+### Tareas programadas nuevas
+
+```powershell
+$t = Get-ScheduledTask -TaskPath "\" -TaskName "<NOMBRE>"
 $t.Actions | Format-List Execute, Arguments
-$t.Triggers | Format-List
 $t.Principal | Format-List UserId, RunLevel
 Export-ScheduledTask -TaskName "<NOMBRE>" -TaskPath "\"
 ```
 
-- Si la reconoces (actualizacion de un programa, algo que instalaste): `& "C:\Scripts\Check-Port22.ps1" -AprobarTareas`.
-- Si no la reconoces: deshabilitar y luego eliminar.
-
-```powershell
-Disable-ScheduledTask -TaskName "<NOMBRE>" -TaskPath "\"
-Unregister-ScheduledTask -TaskName "<NOMBRE>" -TaskPath "\" -Confirm:$false
-```
+Si la reconoces: `-AprobarTareas`. Si no: `Unregister-ScheduledTask -TaskName "<NOMBRE>" -TaskPath "\" -Confirm:$false`.
 
 ---
 
 ## 6. Comandos de uso diario
 
 ```powershell
-# Ejecutar el radar ahora
+# Correr el radar (con popup)
 & "C:\Scripts\Check-Port22.ps1"
 
-# Ver el detalle de las ultimas corridas
-Get-EventLog -LogName Application -Source "Seguridad-Port22" -Newest 10 |
-    Format-Table TimeGenerated, EntryType, EventId, Message -AutoSize
+# Correr sin popup (pruebas / consola)
+& "C:\Scripts\Check-Port22.ps1" -SinPopup
 
-# Solo alertas (ID 1001)
+# Aceptar todas las novedades como conocidas
+& "C:\Scripts\Check-Port22.ps1" -AprobarBaselines
+
+# Aceptar solo tareas nuevas
+& "C:\Scripts\Check-Port22.ps1" -AprobarTareas
+
+# Ver hallazgos recientes
+Get-EventLog -LogName Application -Source "Seguridad-Port22" -Newest 10 |
+    Format-Table TimeGenerated, EntryType, EventId, Message -AutoSize -Wrap
+
+# Solo alertas (criticos)
 Get-EventLog -LogName Application -Source "Seguridad-Port22" -EntryType Error |
     Format-List TimeGenerated, Message
 
-# Aceptar tareas nuevas como conocidas
-& "C:\Scripts\Check-Port22.ps1" -AprobarTareas
-
-# Forzar la tarea programada
+# Forzar la tarea
 Start-ScheduledTask -TaskName "Seguridad - Revision Puerto SSH"
-
-# Estado / ultima corrida / proxima corrida
-Get-ScheduledTask -TaskName "Seguridad - Revision Puerto SSH" | Select-Object TaskName, State
-Get-ScheduledTaskInfo -TaskName "Seguridad - Revision Puerto SSH" |
-    Select-Object LastRunTime, LastTaskResult, NextRunTime
 ```
 
-### Probar que la alerta realmente funciona
+### Probar que la alerta funciona
 
-Crea una tarea inofensiva, corre el radar y borrala (el popup debe mostrarla):
+En PowerShell **como Administrador** (los chequeos con baseline se omiten sin elevacion):
 
 ```powershell
-Register-ScheduledTask -TaskName "PruebaRadar" `
-    -Action (New-ScheduledTaskAction -Execute "notepad.exe") `
-    -Trigger (New-ScheduledTaskTrigger -AtLogOn) -Force
+# 1. Rompe una baseline a proposito (simula una novedad)
+$f = "C:\Scripts\baseline\firewall-reglas.json"
+$o = Get-Content $f -Raw | ConvertFrom-Json
+$o.items = @($o.items)[1..(@($o.items).Count-1)]
+@{ items = @($o.items) } | ConvertTo-Json -Depth 5 | Set-Content $f -Encoding UTF8
 
+# 2. Deberia reportar 1 critico y mostrar popup
 & "C:\Scripts\Check-Port22.ps1"
 
-Unregister-ScheduledTask -TaskName "PruebaRadar" -Confirm:$false
-& "C:\Scripts\Check-Port22.ps1"   # vuelve a RADAR OK y refresca la linea base
+# 3. Restaurar (acepta la baseline actual y no vuelve a alertar)
+& "C:\Scripts\Check-Port22.ps1" -AprobarBaselines
 ```
 
 ---
@@ -432,120 +512,262 @@ Unregister-ScheduledTask -TaskName "PruebaRadar" -Confirm:$false
 
 | Sintoma | Causa | Solucion |
 |---------|-------|----------|
-| `Unexpected token 'PUERTO' in expression or statement` / caracteres raros (por ejemplo `SE DETECT?` en lugar de `SE DETECTO`) | Archivo guardado en ANSI/Windows-1252 | Guardar como **UTF-8 con BOM** (paso 1) y volver a probar. |
-| `The source name "Seguridad-Port22" does not exist` | Falta el paso 2 | Registrar la fuente como Administrador (paso 2). |
-| `The source was not found ... Inaccessible logs: Security, State` | Idem anterior | Idem. |
-| El script dice `RADAR OK` pero no hay evento en el Visor | Falta la fuente del log | Paso 2. El script avisa con `Write-Warning` pero continua. |
-| La tarea figura como ejecutada pero no hay popup | El popup solo aparece en sesion interactiva desbloqueada | Probar a mano; confirmar `LogonType Interactive` y `RunLevel Highest`; revisar que la sesion este desbloqueada. |
-| La tarea no corre a la hora esperada | Equipo apagado/suspendido | `StartWhenAvailable` ya lo cubre al encender. Verificar `NextRunTime`. |
-| `cannot be loaded because running scripts is disabled` | ExecutionPolicy | La tarea ya usa `-ExecutionPolicy Bypass`. Si ejecutas a mano: `powershell -ExecutionPolicy Bypass -File "C:\Scripts\Check-Port22.ps1"`. |
-| Alerta de tareas **todos los dias** por lo mismo | Hay tareas nuevas sin revisar (por diseno) | Revisar y luego `-AprobarTareas`, o eliminar la tarea. |
-| Alerta de puertos con procesos conocidos | Proceso fuera de la lista blanca | Agregarlo a `$procesosPermitidos`. |
-| `PRIMERA EJECUCION` aparece de nuevo | Se borro `tareas_baseline.txt` | Es normal: se recrea sin alertar. Si fue accidental, revisa las tareas actuales antes de confiar en la nueva base. |
-| `Register-ScheduledTask : ... ya existe` | Tarea duplicada | Volver a correr el comando del paso 4 o `Install-Radar.ps1` (usa `-Force`). |
-| `Install-Radar.ps1` parece no hacer nada o la consola se cierra | Se relanzo elevado en **otra** ventana | Aceptar el UAC y mirar la ventana nueva (la original termina enseguida). |
+| `Unexpected token ...` o caracteres raros | Archivo en ANSI/Windows-1252 | Guardar como UTF-8 con BOM (paso 1). |
+| `The source name "Seguridad-Port22" does not exist` | Falta el paso 2 | Registrar la fuente como Administrador. |
+| `Defender: Exclusiones no legibles sin permisos de Administrador` | Corrida no elevada (no deberia pasar: los chequeos de baseline se omiten) | Normal. La tarea (Highest) los ejecuta. Correr el script elevado para verificarlos a mano. |
+| `Sin Administrador: se omiten los chequeos con linea base` | Corrida sin elevar | Esperado. Para el chequeo completo: `Start-ScheduledTask` o PowerShell elevado. |
+| `No se pudo crear ...\baseline` | Carpeta sin permisos de escritura | Mover el proyecto a una carpeta del usuario o dar permisos. |
+| `Radar.config.psd1 invalido` | Error de sintaxis en la config | Validar con `Import-PowerShellDataFile .\Radar.config.psd1`. |
+| Avisos diarios pero **ningun popup** | Por diseno (`PopupSoloCritico = $true`) | Revisar ID 1002 en el Visor o poner `PopupSoloCritico = $false`. |
+| Critico eterno de RDP/WinRM | Los usas a proposito | `Aceptados.RDP = $true` / `Aceptados.WinRM = $true`. |
+| Critico de una regla de firewall legitima | Windows/software agrego una regla | `-AprobarBaselines` o `Ignorar.ReglasFirewall`. |
+| `Register-ScheduledTask : ... ya existe` | Tarea duplicada | Reejecutar `Install-Radar.ps1` (usa `-Force`). |
+| La tarea corre pero no hay popup | Sesion bloqueada o cerrada | El popup aparece en sesion interactiva; el evento queda igual. |
+| La tarea queda `Running` para siempre y `LastTaskResult = 267009` | Algun comando abrio un prompt (tipico: proveedor `WSMan:\` ofreciendo iniciar WinRM) en la ventana oculta | Corregido: el script ya no usa `WSMan:\` y la tarea corre con `-NonInteractive`. Detener la tarea colgada (ver abajo) y reinstalar. |
+| Pregunta `Start WinRM Service ... Do you want to continue?` al correr el radar | Version vieja del chequeo de WinRM accedia a `WSMan:\localhost\Listener` | Actualizar `Check-Port22.ps1` y reinstalar. Responder `N` no cambia nada. |
+| `Install-Radar.ps1` parece no hacer nada | Se relanzo elevado en otra ventana | Aceptar el UAC y mirar la ventana nueva. |
+| Baseline borrada por error | - | Se recrea sola y en silencio en la proxima corrida. |
+
+### Detener una tarea colgada (Administrador)
+
+```powershell
+Stop-ScheduledTask -TaskName "Seguridad - Revision Puerto SSH"
+Get-ScheduledTask -TaskName "Seguridad - Revision Puerto SSH" | Select-Object State
+```
+
+Si sigue en `Running`, matar solo el proceso del radar:
+
+```powershell
+Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" |
+    Where-Object { $_.CommandLine -like '*Check-Port22.ps1*' } |
+    ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
+```
 
 ---
 
 ## 8. Mantenimiento
 
-### Cambiar la hora de ejecucion
+### Cambiar la hora
 
 ```powershell
-$t1 = New-ScheduledTaskTrigger -Daily -At "11:00PM"   # hora deseada
+$t1 = New-ScheduledTaskTrigger -Daily -At "11:00PM"
 $t2 = New-ScheduledTaskTrigger -AtLogOn
-
 Set-ScheduledTask -TaskName "Seguridad - Revision Puerto SSH" -Trigger $t1, $t2
 ```
 
-### Pausar sin borrar
+### Pausar
 
 ```powershell
 Disable-ScheduledTask -TaskName "Seguridad - Revision Puerto SSH"
 Enable-ScheduledTask  -TaskName "Seguridad - Revision Puerto SSH"
 ```
 
-### Reiniciar el control de tareas (nueva linea base)
+### Reiniciar todas las lineas base
 
-Solo cuando estas seguro de que el estado actual es limpio:
+Solo cuando el estado actual es confiable:
 
 ```powershell
-Remove-Item "C:\Scripts\tareas_baseline.txt"
-& "C:\Scripts\Check-Port22.ps1"
+Remove-Item "C:\Scripts\baseline\*.json"
+& "C:\Scripts\Check-Port22.ps1" -SinPopup
 ```
 
-### Desinstalacion completa
-
-Automatica:
+### Desinstalacion
 
 ```powershell
-.\Install-Radar.ps1 -Uninstall
+.\Install-Radar.ps1 -Uninstall     # tarea + fuente de Event Log + baselines
 ```
 
 Manual:
 
 ```powershell
-# 1. Tarea programada
 Unregister-ScheduledTask -TaskName "Seguridad - Revision Puerto SSH" -Confirm:$false
-
-# 2. Fuente del Event Log (Administrador)
 Remove-EventLog -Source "Seguridad-Port22"
-
-# 3. Archivos
-Remove-Item "C:\Scripts\Check-Port22.ps1"
-Remove-Item "C:\Scripts\tareas_baseline.txt"
-Remove-Item "C:\Scripts\Tareas_Referencia.txt" -ErrorAction SilentlyContinue
+Remove-Item "C:\Scripts\baseline" -Recurse -Force
 ```
 
 ---
 
 ## 9. Alcance y limitaciones
 
-- **Detecta, no previene.** No bloquea puertos ni mata procesos.
-- El popup requiere sesion iniciada y desbloqueada. Si el equipo esta apagado, la revision diaria se recupera con `StartWhenAvailable` al encender.
-- La revision es **por instantanea**: si alguien abre el puerto 22 y lo cierra entre dos corridas, no se detecta. Para cobertura continua haria falta un evento/agente, no una tarea programada.
-- Un atacante con privilegios de Administrador puede deshabilitar la tarea, borrar `tareas_baseline.txt` o la fuente del Event Log. Esto es un control de higiene, no un EDR.
-- No reemplaza antivirus, actualizaciones ni copias de seguridad.
+- **Detecta, no previene.** No bloquea puertos, no mata procesos, no desinstala nada.
+- Es una **foto diaria**: si alguien abre el puerto 22 y lo cierra entre dos corridas, no se ve.
+- Los chequeos con linea base y las amenazas activas requieren Administrador (la tarea los corre asi; sin admin se omiten).
+- La vista del sistema cambia con el privilegio (por ejemplo, `Get-ScheduledTask` muestra 193 tareas sin admin y 262 con admin). Por eso las lineas base solo se escriben elevadas.
+- Un atacante con Administrador puede deshabilitar la tarea, borrar `baseline\` o la fuente del Event Log. Esto es higiene, no un EDR.
+- Las lineas base son **por maquina**: no se comparten entre equipos (y no deben subirse a un repo).
+- Fase 2 pendiente: persistencia avanzada (Run keys, WMI), DNS/hosts, eventos 4625/1102/4688/4104, parches, BitLocker.
 
 ---
 
-## 10. Checklist final de instalacion
+## 10. Checklist final
 
-- [ ] `C:\Scripts\Check-Port22.ps1` existe y empieza con BOM (`239 187 191`).
-- [ ] `Install-Radar.ps1` corrido sin errores (o los pasos manuales 2 a 5 completados).
-- [ ] Fuente `Seguridad-Port22` registrada en el log `Application`.
-- [ ] Primera ejecucion manual: creo `tareas_baseline.txt` y mostro `RADAR OK`.
-- [ ] Tarea `Seguridad - Revision Puerto SSH` creada con **dos** triggers (diaria 00:00 + al iniciar sesion).
-- [ ] `RunLevel = Highest` y `LogonType = Interactive`.
-- [ ] `Start-ScheduledTask` deja `LastTaskResult = 0` y un evento nuevo en el Visor.
-- [ ] Prueba de alerta con `PruebaRadar` mostro el popup (y luego se borro).
+- [ ] `Check-Port22.ps1` existe y empieza con BOM (`239 187 191`).
+- [ ] `Radar.config.psd1` presente (o se aceptan los defaults).
+- [ ] `Install-Radar.ps1` corrido sin errores.
+- [ ] Fuente `Seguridad-Port22` registrada en `Application`.
+- [ ] `baseline\` contiene los 5 archivos JSON.
+- [ ] Tarea con 2 triggers, `RunLevel = Highest`, `LogonType = Interactive`.
+- [ ] `LastTaskResult = 0` y evento con la hora actual.
+- [ ] Prueba de popup: romper una baseline, ver el popup y restaurar con `-AprobarBaselines`.
 
 ---
 
-## Apendice - Script de referencia
+## Apendice A - Script (`Check-Port22.ps1`)
 
-> Fuente de verdad: `C:\Scripts\Check-Port22.ps1`. Si difieren, gana el archivo.
+> Fuente de verdad: el archivo en disco. Si difieren, gana el archivo.
 
 ```powershell
 # ==========================================
-# SCRIPT: Radar de Seguridad Diario
-# Revisiones: Puerto SSH, puertos expuestos, tareas nuevas
+# SCRIPT: Radar de Seguridad Diario  (fase 1)
+# Chequeos: SSH, puertos expuestos, tareas nuevas,
+#           Defender, Firewall, RDP/WinRM, Identidad
+#
+# Uso:
+#   .\Check-Port22.ps1                  # corrida normal
+#   .\Check-Port22.ps1 -SinPopup        # prueba: no muestra popup
+#   .\Check-Port22.ps1 -AprobarBaselines # acepta TODAS las novedades como conocidas
+#   .\Check-Port22.ps1 -AprobarTareas    # solo tareas programadas
 # ==========================================
+
 param(
-    [switch]$AprobarTareas
+    [switch]$AprobarTareas,
+    [switch]$AprobarBaselines,
+    [switch]$SinPopup
 )
 
-$eventoLog = "Seguridad-Port22"
-$logType   = "Application"
-$refTareas = Join-Path $PSScriptRoot "tareas_baseline.txt"
-$alertas   = @()
+$eventoLog   = "Seguridad-Port22"
+$logType     = "Application"
+$baseDir     = Join-Path $PSScriptRoot "baseline"
+$refTareasTxt = Join-Path $PSScriptRoot "tareas_baseline.txt"
 
-# Procesos de Windows que pueden escuchar en la red sin ser sospechosos.
-# Si usas Hyper-V / WSL2 / Docker, agrega 'vmms' a esta lista.
-$procesosPermitidos = @(
-    'svchost','lsass','System','smss','csrss','services','wininit','winlogon',
-    'dwm','RuntimeBroker','SearchIndexer','MsMpEng','NisSrv','vmms'
-)
+$script:AprobarTodo   = [bool]$AprobarBaselines
+$script:AprobarTareas = ([bool]$AprobarTareas -or [bool]$AprobarBaselines)
+
+# ---------------------------------------------------------
+# Configuracion (Radar.config.psd1) con defaults
+# ---------------------------------------------------------
+$config = @{
+    PopupSoloCritico = $true
+    Umbrales = @{
+        DiasFirmaDefender = 4
+    }
+    Aceptados = @{
+        RDP   = $false
+        WinRM = $false
+    }
+    ProcesosPermitidos = @(
+        'svchost','lsass','System','smss','csrss','services','wininit','winlogon',
+        'dwm','RuntimeBroker','SearchIndexer','MsMpEng','NisSrv','vmms'
+    )
+    Ignorar = @{
+        ReglasFirewall = @()
+    }
+}
+
+$configPath = Join-Path $PSScriptRoot "Radar.config.psd1"
+if (Test-Path $configPath) {
+    try {
+        $cfg = Import-PowerShellDataFile -Path $configPath
+        foreach ($k in $cfg.Keys) {
+            if ($k -in @('Umbrales','Aceptados','Ignorar')) {
+                foreach ($kk in $cfg[$k].Keys) { $config[$k][$kk] = $cfg[$k][$kk] }
+            } else {
+                $config[$k] = $cfg[$k]
+            }
+        }
+    } catch {
+        Write-Warning "Radar.config.psd1 invalido, se usan los valores por defecto: $($_.Exception.Message)"
+    }
+}
+$script:Config = $config
+
+# Elevacion: los chequeos con linea base solo corren elevados, porque la vista
+# del sistema cambia segun el privilegio (ej: Get-ScheduledTask ve 193 tareas
+# sin admin y 262 con admin). La tarea programada corre con RunLevel Highest.
+$script:EsAdmin = (New-Object Security.Principal.WindowsPrincipal(
+    [Security.Principal.WindowsIdentity]::GetCurrent())).IsInRole(
+    [Security.Principal.WindowsBuiltInRole]::Administrator)
+
+# ---------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------
+function New-Hallazgo {
+    param(
+        [ValidateSet('Critico','Aviso','Info')][string]$Severidad,
+        [string]$Area,
+        [string]$Detalle
+    )
+    [pscustomobject]@{ Severidad = $Severidad; Area = $Area; Detalle = $Detalle }
+}
+
+function Initialize-BaseDir {
+    if (-not (Test-Path $baseDir)) {
+        try { New-Item -ItemType Directory -Path $baseDir -Force | Out-Null }
+        catch { Write-Warning "No se pudo crear $baseDir : $($_.Exception.Message)" }
+    }
+}
+
+function Read-Baseline {
+    param([string]$Nombre)
+    $f = Join-Path $baseDir "$Nombre.json"
+
+    # Devuelve un objeto siempre (nunca un array suelto): evita que PowerShell
+    # "desenrolle" arreglos vacios o de un solo elemento al asignarlos.
+    if (-not (Test-Path $f)) {
+        return [pscustomobject]@{ Ok = $false; Items = @() }
+    }
+
+    try {
+        $o = Get-Content $f -Raw -Encoding UTF8 | ConvertFrom-Json
+        $items = @($o.items | Where-Object { $null -ne $_ })
+        return [pscustomobject]@{ Ok = $true; Items = $items }
+    } catch {
+        Write-Warning "Baseline '$Nombre' ilegible; se regenera."
+        return [pscustomobject]@{ Ok = $false; Items = @() }
+    }
+}
+
+function Write-Baseline {
+    param([string]$Nombre, [string[]]$Items)
+    $f = Join-Path $baseDir "$Nombre.json"
+    try {
+        @{ items = @($Items | Sort-Object -Unique) } | ConvertTo-Json -Depth 5 |
+            Set-Content -Path $f -Encoding UTF8
+    } catch {
+        Write-Warning "No se pudo guardar la baseline '$Nombre': $($_.Exception.Message)"
+    }
+}
+
+function Compare-ConBaseline {
+    param(
+        [string]$Nombre,
+        [string[]]$Actual,
+        [switch]$Aprobar
+    )
+    $f = Join-Path $baseDir "$Nombre.json"
+    $actualOrdenado = @($Actual | Sort-Object -Unique)
+
+    $lectura = Read-Baseline -Nombre $Nombre
+    if (-not $lectura.Ok) {
+        Write-Baseline -Nombre $Nombre -Items $actualOrdenado
+        return [pscustomobject]@{ Nuevos = @(); Primera = $true; Aprobado = $false }
+    }
+
+    $previos = @($lectura.Items)
+    $nuevos = @(Compare-Object -ReferenceObject $previos -DifferenceObject $actualOrdenado -ErrorAction Stop |
+        Where-Object { $_.SideIndicator -eq '=>' } |
+        Select-Object -ExpandProperty InputObject)
+
+    $aprobado = $false
+    if ($Aprobar) {
+        $aprobado = $true
+        Write-Baseline -Nombre $Nombre -Items $actualOrdenado
+    } elseif ($nuevos.Count -eq 0) {
+        Write-Baseline -Nombre $Nombre -Items $actualOrdenado
+    }
+
+    return [pscustomobject]@{ Nuevos = $nuevos; Primera = $false; Aprobado = $aprobado }
+}
 
 function Write-LogSeguridad {
     param([string]$Mensaje, [string]$Tipo = 'Information', [int]$Id = 1000)
@@ -557,74 +779,448 @@ function Write-LogSeguridad {
     }
 }
 
-# --- Revision 1: Puerto 22 (SSH) ---
-$sshPuerto   = Get-NetTCPConnection -LocalPort 22 -State Listen -ErrorAction SilentlyContinue
-$sshServicio = Get-Service -Name sshd -ErrorAction SilentlyContinue
+# ---------------------------------------------------------
+# Chequeos
+# ---------------------------------------------------------
+function Test-PuertoSSH {
+    $out = @()
 
-if ($sshPuerto) {
-    $alertas += "CRITICO: Puerto 22 (SSH) ABIERTO y escuchando."
-}
-if ($sshServicio) {
-    $alertas += "ADVERTENCIA: servicio sshd instalado (estado: $($sshServicio.Status)). El puerto 22 podria abrirse."
-}
+    $ssh = Get-NetTCPConnection -LocalPort 22 -State Listen -ErrorAction SilentlyContinue
+    if ($ssh) {
+        $pids = (@($ssh) | Select-Object -ExpandProperty OwningProcess -Unique) -join ', '
+        $out += New-Hallazgo 'Critico' 'SSH' "Puerto 22 ABIERTO y escuchando (PID: $pids)"
+    }
 
-# --- Revision 2: Puertos escuchando en 0.0.0.0 / :: (expuestos a la red) ---
-$puertosPublicos = Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue |
-    Where-Object { $_.LocalAddress -in @('0.0.0.0','::') } |
-    ForEach-Object {
-        $proc   = Get-Process -Id $_.OwningProcess -ErrorAction SilentlyContinue
-        $nombre = if ($proc) { $proc.Name } else { 'desconocido' }
-        [PSCustomObject]@{ Puerto = $_.LocalPort; Proceso = $nombre }
-    } |
-    Where-Object { $_.Proceso -notin $procesosPermitidos } |
-    Sort-Object Puerto -Unique
+    $svc = Get-Service -Name sshd -ErrorAction SilentlyContinue
+    if ($svc) {
+        $out += New-Hallazgo 'Aviso' 'SSH' "Servicio sshd instalado (estado: $($svc.Status)). Puede abrir el puerto 22."
+    }
 
-if ($puertosPublicos) {
-    $detalle = ($puertosPublicos | ForEach-Object { "$($_.Puerto) ($($_.Proceso))" }) -join ", "
-    $alertas += "ADVERTENCIA: Puertos expuestos por procesos no habituales: $detalle"
+    return $out
 }
 
-# --- Revision 3: Tareas programadas nuevas (comparadas con linea base) ---
-$tareasActuales = Get-ScheduledTask |
-    ForEach-Object { "$($_.TaskPath)$($_.TaskName)" } |
-    Sort-Object -Unique
+function Test-PuertosExpuestos {
+    $out = @()
 
-$tareasNuevas = @()
-if (Test-Path $refTareas) {
-    $tareasPrevias = Get-Content $refTareas | Where-Object { $_.Trim() } | Sort-Object -Unique
-    $tareasNuevas = Compare-Object -ReferenceObject $tareasPrevias -DifferenceObject $tareasActuales |
-        Where-Object { $_.SideIndicator -eq '=>' } |
-        Select-Object -ExpandProperty InputObject
+    $lista = Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue |
+        Where-Object { $_.LocalAddress -in @('0.0.0.0','::') } |
+        ForEach-Object {
+            $proc   = Get-Process -Id $_.OwningProcess -ErrorAction SilentlyContinue
+            $nombre = if ($proc) { $proc.Name } else { 'desconocido' }
+            [pscustomobject]@{ Puerto = $_.LocalPort; Proceso = $nombre }
+        } |
+        Where-Object { $script:Config.ProcesosPermitidos -notcontains $_.Proceso } |
+        Sort-Object Puerto -Unique
+
+    if ($lista) {
+        $detalle = (@($lista) | ForEach-Object { "$($_.Puerto) ($($_.Proceso))" }) -join ', '
+        $out += New-Hallazgo 'Aviso' 'Puertos' "Escuchando en la red por procesos no habituales: $detalle"
+    }
+
+    return $out
+}
+
+function Test-TareasProgramadas {
+    $out = @()
+
+    if (-not $script:EsAdmin) { return $out }
+
+    $actuales = @(Get-ScheduledTask |
+        ForEach-Object { "$($_.TaskPath)$($_.TaskName)" } |
+        Sort-Object -Unique)
+
+    # Migracion: si existe la baseline vieja en texto, se importa una vez
+    $jsonTareas = Join-Path $baseDir 'tareas.json'
+    if (-not (Test-Path $jsonTareas) -and (Test-Path $refTareasTxt)) {
+        $previas = @(Get-Content $refTareasTxt | Where-Object { $_.Trim() } | Sort-Object -Unique)
+        if ($previas.Count -gt 0) {
+            Write-Baseline -Nombre 'tareas' -Items $previas
+            $out += New-Hallazgo 'Info' 'Tareas' "Linea base migrada desde tareas_baseline.txt ($($previas.Count) tareas)."
+        }
+    }
+
+    $cmp = Compare-ConBaseline -Nombre 'tareas' -Actual $actuales -Aprobar:$script:AprobarTareas
+
+    if ($cmp.Primera) {
+        $out += New-Hallazgo 'Info' 'Tareas' "Linea base creada ($($actuales.Count) tareas)."
+    } elseif ($cmp.Aprobado) {
+        if ($cmp.Nuevos.Count -gt 0) {
+            $out += New-Hallazgo 'Info' 'Tareas' "$($cmp.Nuevos.Count) tareas nuevas aceptadas en la linea base."
+        }
+    } elseif ($cmp.Nuevos.Count -gt 0) {
+        $nombres = (@($cmp.Nuevos) | Sort-Object) -join '; '
+        $out += New-Hallazgo 'Aviso' 'Tareas' "Tareas programadas nuevas: $nombres"
+    }
+
+    return $out
+}
+
+function Test-Defender {
+    $out = @()
+
+    $mp = Get-MpComputerStatus -ErrorAction SilentlyContinue
+    if (-not $mp) {
+        $out += New-Hallazgo 'Aviso' 'Defender' 'No se pudo leer el estado de Microsoft Defender (posible antivirus de terceros o VM sin Defender).'
+        return $out
+    }
+
+    $modo = "$($mp.AMRunningMode)"
+    if (-not $mp.RealTimeProtectionEnabled) {
+        if ($modo -match 'Passive') {
+            $out += New-Hallazgo 'Aviso' 'Defender' "Defender en modo '$modo': hay otro antivirus activo."
+        } else {
+            $out += New-Hallazgo 'Critico' 'Defender' "Proteccion en tiempo real DESACTIVADA (modo: '$modo')."
+        }
+    }
+
+    if (($mp.PSObject.Properties.Name -contains 'IsTamperProtected') -and (-not $mp.IsTamperProtected)) {
+        $out += New-Hallazgo 'Aviso' 'Defender' 'Proteccion contra manipulacion (Tamper Protection) desactivada.'
+    }
+
+    $edad = [int]$mp.AntivirusSignatureAge
+    if ($edad -gt [int]$script:Config.Umbrales.DiasFirmaDefender) {
+        $out += New-Hallazgo 'Aviso' 'Defender' "Firmas con $edad dias de antiguedad (umbral: $($script:Config.Umbrales.DiasFirmaDefender))."
+    }
+
+    $activas = @()
+    if ($script:EsAdmin) {
+        $activas = @(Get-MpThreat -ErrorAction SilentlyContinue | Where-Object { $_.IsActive })
+    }
+    if ($activas.Count -gt 0) {
+        $nombres = (@($activas) | ForEach-Object { $_.ThreatName } | Select-Object -Unique) -join '; '
+        $out += New-Hallazgo 'Critico' 'Defender' "Amenazas ACTIVAS detectadas: $nombres"
+    }
+
+    if ($script:EsAdmin) {
+        $pref = Get-MpPreference -ErrorAction SilentlyContinue
+        if ($pref) {
+            $crudo = @(@($pref.ExclusionPath) + @($pref.ExclusionProcess) + @($pref.ExclusionExtension)) |
+                Where-Object { $_ }
+
+            $sinPermiso = @($crudo | Where-Object { "$_" -match 'Must be an administrator to view exclusions' })
+            if ($sinPermiso.Count -gt 0) {
+                $out += New-Hallazgo 'Info' 'Defender' 'Exclusiones no legibles sin permisos de Administrador; se omiten en esta corrida.'
+            } else {
+                $excl = @()
+                foreach ($p in @($pref.ExclusionPath))      { if ($p) { $excl += "Ruta|$p" } }
+                foreach ($p in @($pref.ExclusionProcess))   { if ($p) { $excl += "Proceso|$p" } }
+                foreach ($p in @($pref.ExclusionExtension)) { if ($p) { $excl += "Extension|$p" } }
+
+                $cmp = Compare-ConBaseline -Nombre 'defender-exclusiones' -Actual $excl -Aprobar:$script:AprobarTodo
+
+                if ($cmp.Primera) {
+                    $out += New-Hallazgo 'Info' 'Defender' "Linea base de exclusiones creada ($($excl.Count) entradas)."
+                } elseif ($cmp.Aprobado) {
+                    if ($cmp.Nuevos.Count -gt 0) {
+                        $out += New-Hallazgo 'Info' 'Defender' "$($cmp.Nuevos.Count) exclusiones nuevas aceptadas en la linea base."
+                    }
+                } elseif ($cmp.Nuevos.Count -gt 0) {
+                    $out += New-Hallazgo 'Critico' 'Defender' ("Exclusiones NUEVAS en Defender: " + ((@($cmp.Nuevos)) -join '; '))
+                }
+            }
+        }
+    }
+
+    return $out
+}
+
+function Test-Firewall {
+    $out = @()
+
+    $perfiles = @(Get-NetFirewallProfile -ErrorAction SilentlyContinue)
+    if ($perfiles.Count -eq 0) {
+        $out += New-Hallazgo 'Aviso' 'Firewall' 'No se pudo leer el estado de los perfiles de firewall.'
+    }
+
+    foreach ($p in $perfiles) {
+        if (-not $p.Enabled) {
+            $out += New-Hallazgo 'Critico' 'Firewall' "Perfil '$($p.Name)' DESHABILITADO."
+        }
+        if ("$($p.DefaultInboundAction)" -eq 'Allow') {
+            $out += New-Hallazgo 'Critico' 'Firewall' "Perfil '$($p.Name)': DefaultInboundAction = Allow (entradas permitidas por defecto)."
+        }
+    }
+
+    if ($script:EsAdmin) {
+        $ignorar = @($script:Config.Ignorar.ReglasFirewall)
+
+        $permitidas = @(Get-NetFirewallRule -Direction Inbound -Enabled True -Action Allow -ErrorAction SilentlyContinue |
+            Where-Object {
+                # En el objeto de Get-NetFirewallRule, "Any" suele venir como cadena vacia
+                $ra = ($_.RemoteAddress -join ',')
+                $esAny = [string]::IsNullOrWhiteSpace($ra) -or ($ra -match 'Any')
+                $esAny -and ("$($_.Profile)" -match 'Public|Any')
+            } |
+            ForEach-Object { [pscustomobject]@{ Nombre = "$($_.Name)"; Texto = "$($_.Name)|$($_.DisplayName)" } } |
+            Where-Object { $ignorar -notcontains $_.Nombre } |
+            ForEach-Object { $_.Texto })
+
+        $cmp = Compare-ConBaseline -Nombre 'firewall-reglas' -Actual $permitidas -Aprobar:$script:AprobarTodo
+
+        if ($cmp.Primera) {
+            $out += New-Hallazgo 'Info' 'Firewall' "Linea base de reglas de entrada creada ($($permitidas.Count) reglas)."
+        } elseif ($cmp.Aprobado) {
+            if ($cmp.Nuevos.Count -gt 0) {
+                $out += New-Hallazgo 'Info' 'Firewall' "$($cmp.Nuevos.Count) reglas nuevas aceptadas en la linea base."
+            }
+        } elseif ($cmp.Nuevos.Count -gt 0) {
+            $detalle = (@($cmp.Nuevos) | ForEach-Object { ($_ -split '\|', 2)[1] }) -join '; '
+            $out += New-Hallazgo 'Critico' 'Firewall' "Reglas de entrada NUEVAS expuestas a redes publicas: $detalle"
+        }
+    }
+
+    return $out
+}
+
+function Test-AccesoRemoto {
+    $out = @()
+
+    $ts = Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server' -ErrorAction SilentlyContinue
+    if ($ts -and $ts.fDenyTSConnections -eq 0) {
+        $severidad = if ($script:Config.Aceptados.RDP) { 'Info' } else { 'Critico' }
+        $out += New-Hallazgo $severidad 'RDP' 'Escritorio Remoto HABILITADO (fDenyTSConnections = 0).'
+
+        $rdp = Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -ErrorAction SilentlyContinue
+        if ($rdp) {
+            if ($rdp.UserAuthentication -eq 0) {
+                $out += New-Hallazgo 'Aviso' 'RDP' 'NLA (Network Level Authentication) deshabilitado.'
+            }
+            if ($rdp.PortNumber -and $rdp.PortNumber -ne 3389) {
+                $out += New-Hallazgo 'Aviso' 'RDP' "RDP configurado en puerto no estandar: $($rdp.PortNumber)."
+            }
+        }
+    }
+
+    # OJO: no usar el proveedor WSMan:\ aca. Al accederlo, PowerShell ofrece
+    # INICIAR el servicio WinRM y, en la tarea oculta, queda esperando respuesta.
+    $svc = Get-Service -Name WinRM -ErrorAction SilentlyContinue
+    if ($svc) {
+        $escucha = @(Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue |
+            Where-Object { $_.LocalPort -in @(5985, 5986) })
+
+        if ($svc.Status -eq 'Running' -or $escucha.Count -gt 0) {
+            $severidad = if ($script:Config.Aceptados.WinRM) { 'Info' } else { 'Critico' }
+            $detalle = if ($svc.Status -eq 'Running') {
+                'servicio corriendo'
+            } else {
+                $puertos = (@($escucha) | Select-Object -ExpandProperty LocalPort -Unique) -join ','
+                "escuchando en $puertos"
+            }
+            $out += New-Hallazgo $severidad 'WinRM' "WinRM activo ($detalle): administracion remota expuesta en 5985/5986."
+        } elseif ($svc.StartType -eq 'Automatic') {
+            $out += New-Hallazgo 'Aviso' 'WinRM' 'WinRM con arranque automatico: se iniciara en el proximo reinicio.'
+        }
+    }
+
+    return $out
+}
+
+function Test-Identidad {
+    $out = @()
+
+    # Administradores locales (por SID: funciona en Windows en espanol)
+    if ($script:EsAdmin) {
+        $admins = @(Get-LocalGroup -SID 'S-1-5-32-544' -ErrorAction SilentlyContinue |
+            Get-LocalGroupMember -ErrorAction SilentlyContinue |
+            ForEach-Object { "$($_.ObjectClass)|$($_.SID.Value)|$($_.Name)" })
+
+        $cmp = Compare-ConBaseline -Nombre 'identidad-admins' -Actual $admins -Aprobar:$script:AprobarTodo
+        if ($cmp.Primera) {
+            $out += New-Hallazgo 'Info' 'Identidad' "Linea base de administradores creada ($($admins.Count) miembros)."
+        } elseif ($cmp.Aprobado) {
+            if ($cmp.Nuevos.Count -gt 0) {
+                $out += New-Hallazgo 'Info' 'Identidad' "$($cmp.Nuevos.Count) cambios de administradores aceptados en la linea base."
+            }
+        } elseif ($cmp.Nuevos.Count -gt 0) {
+            $nombres = (@($cmp.Nuevos) | ForEach-Object { ($_ -split '\|')[2] }) -join '; '
+            $out += New-Hallazgo 'Critico' 'Identidad' "NUEVOS miembros en Administradores locales: $nombres"
+        }
+    }
+
+    # Usuarios locales
+    if ($script:EsAdmin) {
+        $usuarios = @(Get-LocalUser -ErrorAction SilentlyContinue |
+            ForEach-Object { "$($_.Name)|Enabled=$($_.Enabled)|PasswordRequired=$($_.PasswordRequired)" })
+
+        $cmp = Compare-ConBaseline -Nombre 'identidad-usuarios' -Actual $usuarios -Aprobar:$script:AprobarTodo
+        if ($cmp.Primera) {
+            $out += New-Hallazgo 'Info' 'Identidad' "Linea base de usuarios locales creada ($($usuarios.Count) cuentas)."
+        } elseif ($cmp.Aprobado) {
+            if ($cmp.Nuevos.Count -gt 0) {
+                $out += New-Hallazgo 'Info' 'Identidad' "$($cmp.Nuevos.Count) cambios de cuentas aceptados en la linea base."
+            }
+        } elseif ($cmp.Nuevos.Count -gt 0) {
+            $nombres = (@($cmp.Nuevos) | ForEach-Object { ($_ -split '\|')[0] }) -join '; '
+            $out += New-Hallazgo 'Critico' 'Identidad' "Cuentas locales NUEVAS o modificadas: $nombres"
+        }
+    }
+
+    # Cuentas integradas
+    $invitado = Get-LocalUser -ErrorAction SilentlyContinue | Where-Object { $_.SID.Value -like '*-501' }
+    if ($invitado -and $invitado.Enabled) {
+        $out += New-Hallazgo 'Aviso' 'Identidad' "Cuenta Guest/Invitado HABILITADA ($($invitado.Name))."
+    }
+
+    $adminIntegrado = Get-LocalUser -ErrorAction SilentlyContinue | Where-Object { $_.SID.Value -like '*-500' }
+    if ($adminIntegrado -and $adminIntegrado.Enabled) {
+        $out += New-Hallazgo 'Aviso' 'Identidad' "Cuenta Administrator integrada HABILITADA ($($adminIntegrado.Name))."
+    }
+
+    # Autologon con contrasena en texto plano
+    $winlogon = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon' -ErrorAction SilentlyContinue
+    if ($winlogon -and $winlogon.DefaultPassword) {
+        $out += New-Hallazgo 'Critico' 'Identidad' 'Autologon con contrasena en texto plano en el registro (Winlogon\DefaultPassword).'
+    }
+
+    # UAC
+    $lsaSystem = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' -ErrorAction SilentlyContinue
+    if ($lsaSystem -and $lsaSystem.EnableLUA -ne 1) {
+        $out += New-Hallazgo 'Critico' 'Identidad' "UAC DESHABILITADO (EnableLUA = $($lsaSystem.EnableLUA))."
+    }
+
+    # WDigest: almacenamiento de credenciales en claro
+    $wdigest = Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\WDigest' -Name UseLogonCredential -ErrorAction SilentlyContinue
+    if ($wdigest -and $wdigest.UseLogonCredential -eq 1) {
+        $out += New-Hallazgo 'Critico' 'Identidad' 'WDigest con UseLogonCredential = 1 (credenciales recuperables desde memoria).'
+    }
+
+    return $out
+}
+
+# ---------------------------------------------------------
+# Ejecucion
+# ---------------------------------------------------------
+Initialize-BaseDir
+
+if (-not $script:EsAdmin) {
+    Write-Output "[i] Sin Administrador: se omiten los chequeos con linea base (tareas, exclusiones de Defender, reglas de firewall, identidad) y amenazas activas."
+    Write-Output "    Para el chequeo completo: Start-ScheduledTask -TaskName 'Seguridad - Revision Puerto SSH' o PowerShell elevado."
+}
+
+$hallazgos = @()
+
+$chequeos = @(
+    @{ Nombre = 'SSH';       Funcion = { Test-PuertoSSH } },
+    @{ Nombre = 'Puertos';   Funcion = { Test-PuertosExpuestos } },
+    @{ Nombre = 'Tareas';    Funcion = { Test-TareasProgramadas } },
+    @{ Nombre = 'Defender';  Funcion = { Test-Defender } },
+    @{ Nombre = 'Firewall';  Funcion = { Test-Firewall } },
+    @{ Nombre = 'RDP/WinRM'; Funcion = { Test-AccesoRemoto } },
+    @{ Nombre = 'Identidad'; Funcion = { Test-Identidad } }
+)
+
+foreach ($c in $chequeos) {
+    try {
+        $hallazgos += & $c.Funcion
+    } catch {
+        $hallazgos += New-Hallazgo 'Aviso' $c.Nombre "No se pudo evaluar: $($_.Exception.Message)"
+    }
+}
+
+$criticos = @($hallazgos | Where-Object { $_.Severidad -eq 'Critico' })
+$avisos   = @($hallazgos | Where-Object { $_.Severidad -eq 'Aviso' })
+$infos    = @($hallazgos | Where-Object { $_.Severidad -eq 'Info' })
+
+foreach ($h in $infos)    { Write-Output "[i] $($h.Area): $($h.Detalle)" }
+foreach ($h in $avisos)   { Write-Output "[!] $($h.Area): $($h.Detalle)" }
+foreach ($h in $criticos) { Write-Output "[X] $($h.Area): $($h.Detalle)" }
+
+# --- Event Log ---
+$partes = @()
+if ($criticos.Count -gt 0) {
+    $partes += "CRITICOS ($($criticos.Count)):"
+    $criticos | ForEach-Object { $partes += " - $($_.Area): $($_.Detalle)" }
+}
+if ($avisos.Count -gt 0) {
+    $partes += "AVISOS ($($avisos.Count)):"
+    $avisos | ForEach-Object { $partes += " - $($_.Area): $($_.Detalle)" }
+}
+if ($partes.Count -eq 0) { $partes = @('Radar OK: sin hallazgos.') }
+$mensajeEvento = $partes -join "`n"
+
+if ($criticos.Count -gt 0) {
+    Write-LogSeguridad -Mensaje $mensajeEvento -Tipo Error -Id 1001
+} elseif ($avisos.Count -gt 0) {
+    Write-LogSeguridad -Mensaje $mensajeEvento -Tipo Warning -Id 1002
 } else {
-    Write-Output "PRIMERA EJECUCION: linea base de tareas creada en $refTareas"
+    Write-LogSeguridad -Mensaje $mensajeEvento -Tipo Information -Id 1000
 }
 
-if ($tareasNuevas.Count -gt 0 -and -not $AprobarTareas) {
-    $alertas += "REVISION: Tareas programadas nuevas:`n  - " + ($tareasNuevas -join "`n  - ")
+# --- Popup ---
+$mostrarPopup = $false
+if ($criticos.Count -gt 0) {
+    $mostrarPopup = $true
+} elseif ($avisos.Count -gt 0 -and -not $script:Config.PopupSoloCritico) {
+    $mostrarPopup = $true
 }
+if ($SinPopup) { $mostrarPopup = $false }
 
-# La linea base solo se actualiza si no hay tareas nuevas (o si las apruebas).
-# Asi la alerta se repite todos los dias hasta que tomes accion.
-if ($AprobarTareas -or $tareasNuevas.Count -eq 0) {
-    $tareasActuales | Set-Content -Path $refTareas -Encoding UTF8
-}
+if ($mostrarPopup) {
+    $lineasPopup = @()
+    if ($criticos.Count -gt 0) {
+        $lineasPopup += "CRITICOS:"
+        $criticos | ForEach-Object { $lineasPopup += " - $($_.Area): $($_.Detalle)" }
+    }
+    if ($avisos.Count -gt 0) {
+        $lineasPopup += ""
+        $lineasPopup += "Avisos: $($avisos.Count) (ver Visor de Eventos, ID 1002)"
+    }
+    if ($lineasPopup.Count -gt 18) {
+        $resto = $lineasPopup.Count - 17
+        $lineasPopup = @($lineasPopup[0..16]) + "... y $resto mas (ver Visor de Eventos)"
+    }
 
-# --- Reporte final ---
-if ($alertas.Count -gt 0) {
-    $mensaje = ($alertas -join "`n")
-
-    Write-LogSeguridad -Mensaje $mensaje -Tipo Error -Id 1001
-    Write-Output "ALERTAS GENERADAS:"
-    $alertas | ForEach-Object { Write-Output "  - $_" }
-
+    $texto = ($lineasPopup -join "`n") + "`n`nRevisar y actuar."
     Add-Type -AssemblyName System.Windows.Forms
     [System.Windows.Forms.MessageBox]::Show(
-        $mensaje + "`n`nRevise inmediatamente.",
+        $texto,
         "RADAR DE SEGURIDAD",
         [System.Windows.Forms.MessageBoxButtons]::OK,
         [System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
+}
+
+# --- Consola ---
+if ($criticos.Count -eq 0 -and $avisos.Count -eq 0) {
+    Write-Output "RADAR OK: sin amenazas detectadas ($($infos.Count) informativos)."
 } else {
-    Write-LogSeguridad -Mensaje "Radar OK: sin puerto 22, sin puertos inusuales, sin tareas nuevas." -Tipo Information -Id 1000
-    Write-Output "RADAR OK: Sin amenazas detectadas."
+    Write-Output "RADAR: $($criticos.Count) criticos, $($avisos.Count) avisos. Evento ID $(if ($criticos.Count) { 1001 } else { 1002 })."
+}
+```
+
+## Apendice B - Configuracion (`Radar.config.psd1`)
+
+```powershell
+# ==========================================
+# Radar.config.psd1
+# Configuracion del Radar de Seguridad.
+# Si el archivo no existe, el script usa estos mismos valores.
+# ==========================================
+@{
+    # $true  = solo los hallazgos CRITICOS abren popup (recomendado, evita fatiga)
+    # $false = los AVISOS tambien abren popup
+    PopupSoloCritico = $true
+
+    Umbrales = @{
+        # Dias de antiguedad maxima de las firmas de Defender antes de avisar
+        DiasFirmaDefender = 4
+    }
+
+    # Estados que aceptas de forma permanente y no deben alertar como criticos.
+    # Poner en $true si vos usas esa funcion a proposito.
+    Aceptados = @{
+        RDP   = $false
+        WinRM = $false
+    }
+
+    # Procesos que pueden escuchar en la red sin generar aviso
+    ProcesosPermitidos = @(
+        'svchost','lsass','System','smss','csrss','services','wininit','winlogon',
+        'dwm','RuntimeBroker','SearchIndexer','MsMpEng','NisSrv','vmms'
+    )
+
+    Ignorar = @{
+        # Nombres tecnicos (propiedad Name) de reglas de firewall que no queres vigilar
+        ReglasFirewall = @()
+    }
 }
 ```

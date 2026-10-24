@@ -1,4 +1,5 @@
-tareas_baseline.txt
+﻿tareas_baseline.txt
 Tareas_Referencia.txt
+baseline/
 *.evtx
 *.log
