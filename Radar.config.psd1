@@ -23,11 +23,20 @@
     # Procesos que pueden escuchar en la red sin generar aviso
     ProcesosPermitidos = @(
         'svchost','lsass','System','smss','csrss','services','wininit','winlogon',
-        'dwm','RuntimeBroker','SearchIndexer','MsMpEng','NisSrv','vmms'
+        'dwm','RuntimeBroker','SearchIndexer','MsMpEng','NisSrv','vmms','steam'
     )
 
     Ignorar = @{
-        # Nombres tecnicos (propiedad Name) de reglas de firewall que no queres vigilar
+        # Patrones (con comodines * y ?) sobre Name o DisplayName de la regla.
+        # Sirven para silenciar reglas conocidas y ruidosas, por ejemplo:
+        #   'Microsoft Edge*', 'Brave*', 'Firefox*', '*mDNS*'
+        # Por defecto vacio: las reglas de navegadores ya no generan falsos
+        # positivos porque el script normaliza los GUIDs del Name.
         ReglasFirewall = @()
+
+        # Patrones (con comodines) sobre el TaskPath de tareas programadas.
+        # SoftLanding es un componente de Windows Update que recrea sus tareas
+        # con GUIDs nuevos en cada ciclo de actualizacion.
+        TareasPath = @('\SoftLanding\*')
     }
 }

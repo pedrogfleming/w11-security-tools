@@ -157,3 +157,56 @@ Describe 'Lineas base del radar' {
         }
     }
 }
+
+Describe 'Normalizacion de claves' {
+
+    Context 'ConvertTo-ClaveEstable' {
+
+        It 'reemplaza GUIDs por un marcador' {
+            ConvertTo-ClaveEstable -Texto '{A799B4F5-3FC8-45FC-B49C-C8E8FEB9D490}' |
+                Should -Be '{GUID}'
+        }
+
+        It 'reemplaza IDs numericos largos' {
+            ConvertTo-ClaveEstable -Texto 'SoftLandingTriggerTask-128000000001615609-render' |
+                Should -Be 'SoftLandingTriggerTask-<ID>-render'
+        }
+
+        It 'deja intactos los nombres estables' {
+            ConvertTo-ClaveEstable -Texto '\Microsoft\Windows\Defrag\ScheduledDefrag' |
+                Should -Be '\Microsoft\Windows\Defrag\ScheduledDefrag'
+        }
+
+        It 'no toca los SIDs de usuario' {
+            $sid = '\SoftLanding\S-1-5-21-2379985883-2381256654-1499518547-1001\'
+            ConvertTo-ClaveEstable -Texto $sid | Should -Be $sid
+        }
+
+        It 'devuelve cadena vacia para null o espacios' {
+            ConvertTo-ClaveEstable -Texto '' | Should -Be ''
+            ConvertTo-ClaveEstable -Texto '   ' | Should -Be ''
+        }
+    }
+
+    Context 'Test-Ignorado' {
+
+        It 'acepta comodines' {
+            Test-Ignorado -Valores @('\SoftLanding\S-1-5-21-1\') -Patrones @('\SoftLanding\*') |
+                Should -BeTrue
+        }
+
+        It 'no ignora cuando no coincide' {
+            Test-Ignorado -Valores @('\Microsoft\Windows\Defrag\') -Patrones @('\SoftLanding\*') |
+                Should -BeFalse
+        }
+
+        It 'compara contra varios valores' {
+            Test-Ignorado -Valores @('{GUID}', 'Microsoft Edge (mDNS-In)') -Patrones @('Firefox*', 'Microsoft Edge*') |
+                Should -BeTrue
+        }
+
+        It 'ignora patrones vacios o nulos' {
+            Test-Ignorado -Valores @('x') -Patrones @('', $null) | Should -BeFalse
+        }
+    }
+}

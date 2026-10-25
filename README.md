@@ -60,10 +60,11 @@ Cuando algo cambia: **evento en el Visor de Eventos** y, si es **critico**, **po
 | `PSScriptAnalyzerSettings.psd1` | Reglas excluidas del lint (a proposito). | No |
 | `LICENSE` | Licencia MIT. | No |
 | `.gitattributes` | Normalizacion de line endings (LF en repo, CRLF en scripts). | No |
-| `baseline\*.json` | Lineas base por chequeo (se crean solas). | Si |
-| `tareas_baseline.txt` | **Legacy**: se migra automaticamente a `baseline\tareas.json`. Se puede borrar. | No |
+| `baseline\*.json` | Lineas base por chequeo (se crean solas, con claves normalizadas). | Si |
 | `Firewall.md` | Comando opcional de endurecimiento. | No |
 | `Tareas_Referencia.txt` | **Obsoleto** (version vieja). Se puede borrar. | No |
+
+> `tareas_baseline.txt` (formato legacy) ya no existe: se migro a `baseline\tareas.json` y el script lo recrea solo si alguien lo vuelve a dejar.
 
 > Las rutas son relativas al script (`$PSScriptRoot`), asi que el proyecto funciona en cualquier carpeta.
 
@@ -340,9 +341,23 @@ PopupSoloCritico = $false
 | `Aceptados.RDP` | `$false` | `$true` si usas Escritorio Remoto a proposito. |
 | `Aceptados.WinRM` | `$false` | `$true` si usas WinRM a proposito. |
 | `ProcesosPermitidos` | lista | Procesos que pueden escuchar en red sin aviso. |
-| `Ignorar.ReglasFirewall` | `@()` | Nombres tecnicos de reglas a no vigilar. |
+| `Ignorar.ReglasFirewall` | `@()` | Patrones con comodines (`*`, `?`) sobre `Name` o `DisplayName` de reglas a no vigilar (ej: `Microsoft Edge*`). |
+| `Ignorar.TareasPath` | `@('\SoftLanding\*')` | Patrones con comodines sobre el `TaskPath` de tareas a no vigilar. |
 
 Si el archivo falta o es invalido, el script usa los valores por defecto (avisa por consola).
+
+#### Normalizacion de identificadores (anti falso positivo)
+
+Windows Update y algunos instaladores (Edge, Brave, Firefox, WebView2) **borran y recrean** sus tareas y reglas de firewall con **GUIDs nuevos** y IDs numericos largos en cada actualizacion. Si la baseline guardara el nombre crudo, cada update pareceria una novedad y dispararia un critico diario.
+
+Por eso el script normaliza la clave antes de comparar (`ConvertTo-ClaveEstable`):
+
+- `{A799B4F5-3FC8-45FC-B49C-C8E8FEB9D490}` -> `{GUID}`
+- `render-128000000001615609-...` -> `render-<ID>`
+
+Resultado: doce reglas `Microsoft Edge (mDNS-In)` con GUID distinto colapsan en **una sola clave estable**; lo mismo para las tareas de `\SoftLanding\`. Una regla o tarea **realmente nueva** (otro nombre, otra ruta, otro perfil) sigue alertando.
+
+No confundir con `Ignorar.*`, que es para **silenciar areas completas** por decision tuya. La normalizacion no oculta nada: solo evita que un GUID nuevo cuente como cambio.
 
 ### Lineas base
 
@@ -525,7 +540,9 @@ $o.items = @($o.items)[1..(@($o.items).Count-1)]
 | `Radar.config.psd1 invalido` | Error de sintaxis en la config | Validar con `Import-PowerShellDataFile .\Radar.config.psd1`. |
 | Avisos diarios pero **ningun popup** | Por diseno (`PopupSoloCritico = $true`) | Revisar ID 1002 en el Visor o poner `PopupSoloCritico = $false`. |
 | Critico eterno de RDP/WinRM | Los usas a proposito | `Aceptados.RDP = $true` / `Aceptados.WinRM = $true`. |
-| Critico de una regla de firewall legitima | Windows/software agrego una regla | `-AprobarBaselines` o `Ignorar.ReglasFirewall`. |
+| Critico de una regla de firewall legitima | Windows/software agrego una regla | `-AprobarBaselines` o `Ignorar.ReglasFirewall` (acepta comodines). |
+| Critico diario por `Microsoft Edge (mDNS-In)` / `Brave (mDNS-In)` / `Firefox` despues de actualizar el navegador | Version vieja del script: la baseline guardaba el GUID del `Name`, que el navegador regenera en cada update | Actualizar `Check-Port22.ps1` (normaliza GUIDs) y borrar `baseline\firewall-reglas.json` para que se regenere. |
+| Aviso diario por tareas `\SoftLanding\S-1-5-...` | Componente SoftLanding de Windows Update: recrea sus tareas con GUID/ID nuevos | Ya excluido por `Ignorar.TareasPath = @('\SoftLanding\*')`. Si usas una version vieja, actualizala. |
 | `Register-ScheduledTask : ... ya existe` | Tarea duplicada | Reejecutar `Install-Radar.ps1` (usa `-Force`). |
 | La tarea corre pero no hay popup | Sesion bloqueada o cerrada | El popup aparece en sesion interactiva; el evento queda igual. |
 | La tarea queda `Running` para siempre y `LastTaskResult = 267009` | Algun comando abrio un prompt (tipico: proveedor `WSMan:\` ofreciendo iniciar WinRM) en la ventana oculta | Corregido: el script ya no usa `WSMan:\` y la tarea corre con `-NonInteractive`. Detener la tarea colgada (ver abajo) y reinstalar. |
@@ -725,7 +742,10 @@ $config = @{
         'dwm','RuntimeBroker','SearchIndexer','MsMpEng','NisSrv','vmms'
     )
     Ignorar = @{
+        # Patrones con comodines sobre Name o DisplayName de la regla
         ReglasFirewall = @()
+        # Patrones con comodines sobre el TaskPath
+        TareasPath     = @('\SoftLanding\*')
     }
 }
 
@@ -763,6 +783,32 @@ function New-Hallazgo {
         [string]$Detalle
     )
     [pscustomobject]@{ Severidad = $Severidad; Area = $Area; Detalle = $Detalle }
+}
+
+# Normaliza identificadores volatiles: GUIDs y numeros largos que los
+# instaladores (Edge, Windows Update) regeneran en cada actualizacion.
+# Sin esto, cada update parece "regla/tarea nueva" y genera falsos criticos.
+function ConvertTo-ClaveEstable {
+    param([string]$Texto)
+    if ([string]::IsNullOrWhiteSpace($Texto)) { return '' }
+
+    $t = $Texto -replace '\{[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}\}', '{GUID}'
+    $t = $t -replace '\d{12,}', '<ID>'
+    return $t
+}
+
+# Compara valores contra patrones con comodines (* y ?).
+function Test-Ignorado {
+    param([string[]]$Valores, [string[]]$Patrones)
+
+    foreach ($p in @($Patrones)) {
+        if ([string]::IsNullOrWhiteSpace($p)) { continue }
+        foreach ($v in @($Valores)) {
+            if ([string]::IsNullOrWhiteSpace($v)) { continue }
+            if ($v -like $p) { return $true }
+        }
+    }
+    return $false
 }
 
 function Initialize-BaseDir {
@@ -889,14 +935,22 @@ function Test-TareasProgramadas {
 
     if (-not $script:EsAdmin) { return $out }
 
+    $ignorarPath = @($script:Config.Ignorar.TareasPath)
+
+    # La clave se normaliza (GUIDs/IDs -> marcadores) porque Windows Update y
+    # algunos instaladores recrean la misma tarea con identificadores nuevos.
     $actuales = @(Get-ScheduledTask |
-        ForEach-Object { "$($_.TaskPath)$($_.TaskName)" } |
+        Where-Object { -not (Test-Ignorado -Valores @("$($_.TaskPath)") -Patrones $ignorarPath) } |
+        ForEach-Object { ConvertTo-ClaveEstable -Texto "$($_.TaskPath)$($_.TaskName)" } |
         Sort-Object -Unique)
 
     # Migracion: si existe la baseline vieja en texto, se importa una vez
     $jsonTareas = Join-Path $script:baseDir 'tareas.json'
     if (-not (Test-Path $jsonTareas) -and (Test-Path $refTareasTxt)) {
-        $previas = @(Get-Content $refTareasTxt | Where-Object { $_.Trim() } | Sort-Object -Unique)
+        $previas = @(Get-Content $refTareasTxt |
+            Where-Object { $_.Trim() } |
+            ForEach-Object { ConvertTo-ClaveEstable -Texto $_.Trim() } |
+            Sort-Object -Unique)
         if ($previas.Count -gt 0) {
             Write-Baseline -Nombre 'tareas' -Items $previas
             $out += New-Hallazgo 'Info' 'Tareas' "Linea base migrada desde tareas_baseline.txt ($($previas.Count) tareas)."
@@ -1015,8 +1069,19 @@ function Test-Firewall {
                 $esAny = [string]::IsNullOrWhiteSpace($ra) -or ($ra -match 'Any')
                 $esAny -and ("$($_.Profile)" -match 'Public|Any')
             } |
-            ForEach-Object { [pscustomobject]@{ Nombre = "$($_.Name)"; Texto = "$($_.Name)|$($_.DisplayName)" } } |
-            Where-Object { $ignorar -notcontains $_.Nombre } |
+            ForEach-Object {
+                $nombre  = "$($_.Name)"
+                $mostrar = "$($_.DisplayName)"
+                if ([string]::IsNullOrWhiteSpace($mostrar)) { $mostrar = $nombre }
+                [pscustomobject]@{
+                    Nombre  = $nombre
+                    Mostrar = $mostrar
+                    # Name estable: los GUIDs (Edge/Brave/Firefox, WebView2) cambian
+                    # en cada actualizacion y no deben contar como regla nueva.
+                    Texto   = "$(ConvertTo-ClaveEstable -Texto $nombre)|$mostrar|$($_.Profile)"
+                }
+            } |
+            Where-Object { -not (Test-Ignorado -Valores @($_.Nombre, $_.Mostrar) -Patrones $ignorar) } |
             ForEach-Object { $_.Texto })
 
         $cmp = Compare-ConBaseline -Nombre 'firewall-reglas' -Actual $permitidas -Aprobar:$script:AprobarTodo
@@ -1283,8 +1348,12 @@ if ($criticos.Count -eq 0 -and $avisos.Count -eq 0) {
     )
 
     Ignorar = @{
-        # Nombres tecnicos (propiedad Name) de reglas de firewall que no queres vigilar
+        # Patrones (con comodines * y ?) sobre Name o DisplayName de la regla.
+        # Ejemplos: 'Microsoft Edge*', 'Brave*', 'Firefox*', '*mDNS*'
         ReglasFirewall = @()
+
+        # Patrones (con comodines) sobre el TaskPath de tareas programadas.
+        TareasPath = @('\SoftLanding\*')
     }
 }
 ```

@@ -41,7 +41,10 @@ $config = @{
         'dwm','RuntimeBroker','SearchIndexer','MsMpEng','NisSrv','vmms'
     )
     Ignorar = @{
+        # Patrones con comodines sobre Name o DisplayName de la regla
         ReglasFirewall = @()
+        # Patrones con comodines sobre el TaskPath
+        TareasPath     = @('\SoftLanding\*')
     }
 }
 
@@ -79,6 +82,32 @@ function New-Hallazgo {
         [string]$Detalle
     )
     [pscustomobject]@{ Severidad = $Severidad; Area = $Area; Detalle = $Detalle }
+}
+
+# Normaliza identificadores volatiles: GUIDs y numeros largos que los
+# instaladores (Edge, Windows Update) regeneran en cada actualizacion.
+# Sin esto, cada update parece "regla/tarea nueva" y genera falsos criticos.
+function ConvertTo-ClaveEstable {
+    param([string]$Texto)
+    if ([string]::IsNullOrWhiteSpace($Texto)) { return '' }
+
+    $t = $Texto -replace '\{[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}\}', '{GUID}'
+    $t = $t -replace '\d{12,}', '<ID>'
+    return $t
+}
+
+# Compara valores contra patrones con comodines (* y ?).
+function Test-Ignorado {
+    param([string[]]$Valores, [string[]]$Patrones)
+
+    foreach ($p in @($Patrones)) {
+        if ([string]::IsNullOrWhiteSpace($p)) { continue }
+        foreach ($v in @($Valores)) {
+            if ([string]::IsNullOrWhiteSpace($v)) { continue }
+            if ($v -like $p) { return $true }
+        }
+    }
+    return $false
 }
 
 function Initialize-BaseDir {
@@ -205,14 +234,22 @@ function Test-TareasProgramadas {
 
     if (-not $script:EsAdmin) { return $out }
 
+    $ignorarPath = @($script:Config.Ignorar.TareasPath)
+
+    # La clave se normaliza (GUIDs/IDs -> marcadores) porque Windows Update y
+    # algunos instaladores recrean la misma tarea con identificadores nuevos.
     $actuales = @(Get-ScheduledTask |
-        ForEach-Object { "$($_.TaskPath)$($_.TaskName)" } |
+        Where-Object { -not (Test-Ignorado -Valores @("$($_.TaskPath)") -Patrones $ignorarPath) } |
+        ForEach-Object { ConvertTo-ClaveEstable -Texto "$($_.TaskPath)$($_.TaskName)" } |
         Sort-Object -Unique)
 
     # Migracion: si existe la baseline vieja en texto, se importa una vez
     $jsonTareas = Join-Path $script:baseDir 'tareas.json'
     if (-not (Test-Path $jsonTareas) -and (Test-Path $refTareasTxt)) {
-        $previas = @(Get-Content $refTareasTxt | Where-Object { $_.Trim() } | Sort-Object -Unique)
+        $previas = @(Get-Content $refTareasTxt |
+            Where-Object { $_.Trim() } |
+            ForEach-Object { ConvertTo-ClaveEstable -Texto $_.Trim() } |
+            Sort-Object -Unique)
         if ($previas.Count -gt 0) {
             Write-Baseline -Nombre 'tareas' -Items $previas
             $out += New-Hallazgo 'Info' 'Tareas' "Linea base migrada desde tareas_baseline.txt ($($previas.Count) tareas)."
@@ -331,8 +368,19 @@ function Test-Firewall {
                 $esAny = [string]::IsNullOrWhiteSpace($ra) -or ($ra -match 'Any')
                 $esAny -and ("$($_.Profile)" -match 'Public|Any')
             } |
-            ForEach-Object { [pscustomobject]@{ Nombre = "$($_.Name)"; Texto = "$($_.Name)|$($_.DisplayName)" } } |
-            Where-Object { $ignorar -notcontains $_.Nombre } |
+            ForEach-Object {
+                $nombre  = "$($_.Name)"
+                $mostrar = "$($_.DisplayName)"
+                if ([string]::IsNullOrWhiteSpace($mostrar)) { $mostrar = $nombre }
+                [pscustomobject]@{
+                    Nombre  = $nombre
+                    Mostrar = $mostrar
+                    # Name estable: los GUIDs (Edge/Brave/Firefox, WebView2) cambian
+                    # en cada actualizacion y no deben contar como regla nueva.
+                    Texto   = "$(ConvertTo-ClaveEstable -Texto $nombre)|$mostrar|$($_.Profile)"
+                }
+            } |
+            Where-Object { -not (Test-Ignorado -Valores @($_.Nombre, $_.Mostrar) -Patrones $ignorar) } |
             ForEach-Object { $_.Texto })
 
         $cmp = Compare-ConBaseline -Nombre 'firewall-reglas' -Actual $permitidas -Aprobar:$script:AprobarTodo
