@@ -1,4 +1,4 @@
-# ==========================================
+﻿# ==========================================
 # SCRIPT: Install-Radar.ps1
 # Instalador todo-en-uno del Radar de Seguridad (Windows 11)
 #
@@ -13,6 +13,7 @@
 #   .\Install-Radar.ps1
 #   .\Install-Radar.ps1 -DailyAt "11:00PM"
 #   .\Install-Radar.ps1 -NoFirstRun
+#   .\Install-Radar.ps1 -ConDashboard     # ademas instala el icono en el tray
 #   .\Install-Radar.ps1 -Uninstall
 #
 # Se auto-eleva si no se ejecuta como Administrador.
@@ -24,6 +25,7 @@ param(
     [string]$TaskName = "Seguridad - Revision Puerto SSH",
     [string]$DailyAt  = "12:00AM",
     [switch]$NoFirstRun,
+    [switch]$ConDashboard,
     [switch]$Uninstall
 )
 
@@ -71,6 +73,7 @@ if (-not $esAdmin) {
     if ($PSBoundParameters.ContainsKey('TaskName'))   { $argList += @('-TaskName',   ('"{0}"' -f $TaskName)) }
     if ($PSBoundParameters.ContainsKey('DailyAt'))    { $argList += @('-DailyAt',    ('"{0}"' -f $DailyAt)) }
     if ($NoFirstRun) { $argList += '-NoFirstRun' }
+    if ($ConDashboard) { $argList += '-ConDashboard' }
     if ($Uninstall)  { $argList += '-Uninstall' }
 
     try {
@@ -91,6 +94,8 @@ if (-not $ScriptPath) {
 $ScriptPath = [System.IO.Path]::GetFullPath($ScriptPath)
 $dirBase    = Join-Path (Split-Path $ScriptPath -Parent) 'baseline'
 $configFile = Join-Path (Split-Path $ScriptPath -Parent) 'Radar.config.psd1'
+$trayPath   = Join-Path (Split-Path $ScriptPath -Parent) 'Radar-Tray.ps1'
+$trayTask   = "Seguridad - Dashboard Radar"
 
 # ---------------------------------------------------------
 # Modo desinstalacion
@@ -105,6 +110,19 @@ if ($Uninstall) {
     } else {
         Write-Aviso "La tarea '$TaskName' no existia."
     }
+
+    # Dashboard: quitar tarea y cerrar el icono si esta corriendo
+    $tareaDash = Get-ScheduledTask -TaskName $trayTask -ErrorAction SilentlyContinue
+    if ($tareaDash) {
+        Unregister-ScheduledTask -TaskName $trayTask -Confirm:$false
+        Write-Ok "Tarea '$trayTask' eliminada."
+    }
+    Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -like '*Radar-Tray.ps1*' } |
+        ForEach-Object {
+            Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+            Write-Ok "Icono del dashboard cerrado (PID $($_.ProcessId))."
+        }
 
     if ([System.Diagnostics.EventLog]::SourceExists($source)) {
         Remove-EventLog -Source $source
@@ -291,6 +309,56 @@ if ($ultimo) {
 }
 
 # ---------------------------------------------------------
+# 6. Dashboard en el tray (opcional)
+# ---------------------------------------------------------
+$dashboardOk = $false
+if ($ConDashboard) {
+    Write-Step "6 - Dashboard en el tray"
+
+    if (-not (Test-Path -LiteralPath $trayPath)) {
+        Write-Aviso "No se encontro Radar-Tray.ps1 en $(Split-Path $trayPath -Parent). Se omite el dashboard."
+    } else {
+        $argumentosTray = '-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "{0}"' -f $trayPath
+        $actionTray = New-ScheduledTaskAction -Execute 'PowerShell.exe' -Argument $argumentosTray
+        $triggerTray = New-ScheduledTaskTrigger -AtLogOn
+        $settingsTray = New-ScheduledTaskSettingsSet `
+            -AllowStartIfOnBatteries `
+            -DontStopIfGoingOnBatteries `
+            -StartWhenAvailable `
+            -MultipleInstances IgnoreNew `
+            -ExecutionTimeLimit ([TimeSpan]::Zero)
+
+        Register-ScheduledTask `
+            -TaskName $trayTask `
+            -Action $actionTray `
+            -Trigger $triggerTray `
+            -Settings $settingsTray `
+            -User "$env:USERDOMAIN\$env:USERNAME" `
+            -RunLevel Limited `
+            -Description "Icono del Radar de Seguridad: dashboard de corridas y control de las tareas." `
+            -Force | Out-Null
+        Write-Ok "Tarea '$trayTask' creada (al iniciar sesion, sin privilegios)."
+
+        # Abrir el icono ahora (si ya hay uno, el mutex hace que la nueva instancia salga)
+        $trayPrevio = Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
+            Where-Object { $_.CommandLine -like '*Radar-Tray.ps1*' }
+        if ($trayPrevio) {
+            Write-Ok "El icono ya estaba corriendo (PID $($trayPrevio.ProcessId))."
+        } else {
+            Start-ScheduledTask -TaskName $trayTask
+            Start-Sleep -Seconds 3
+            $estadoTray = (Get-ScheduledTask -TaskName $trayTask).State
+            if ($estadoTray -eq 'Running') {
+                Write-Ok "Icono iniciado. Buscalo en la bandeja del sistema."
+            } else {
+                Write-Aviso "El icono no arranco (estado: $estadoTray). Probar: Start-ScheduledTask -TaskName '$trayTask'"
+            }
+        }
+        $dashboardOk = $true
+    }
+}
+
+# ---------------------------------------------------------
 # Resumen
 # ---------------------------------------------------------
 Write-Host ""
@@ -303,11 +371,17 @@ if ($pausada) {
 }
 Write-Host "  Baseline : $dirBase"
 Write-Host "  Config   : $configFile"
+if ($dashboardOk) {
+    Write-Host "  Dashboard: $trayTask (icono en la bandeja)"
+} else {
+    Write-Host "  Dashboard: no instalado (agregar con -ConDashboard)" -ForegroundColor Gray
+}
 Write-Host ""
 Write-Host "Comandos utiles:" -ForegroundColor Cyan
 Write-Cmd "& '$ScriptPath'"                                          "correr el radar ahora"
 Write-Cmd "& '$ScriptPath' -AprobarBaselines"                        "aceptar novedades como conocidas"
 Write-Cmd "& '$ScriptPath' -AprobarTareas"                           "aceptar solo tareas nuevas"
+Write-Cmd "& '$trayPath' -Mostrar"                                   "abrir el dashboard"
 Write-Cmd "Start-ScheduledTask -TaskName '$TaskName'"                "forzar la tarea"
 Write-Cmd "Get-EventLog -LogName Application -Source '$source' -Newest 5"
 Write-Cmd ".\Install-Radar.ps1 -Uninstall"                           "quitar tarea, fuente y baselines"

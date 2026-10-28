@@ -31,7 +31,8 @@ Cuando algo cambia: **informe en `logs\`**, **evento en el Visor** y, si es **cr
 | 3 | Probar el script a mano (`-SinPopup`) | No* |
 | 4 | Crear la Tarea Programada | **Si** |
 | 5 | Verificar de punta a punta | No |
-| 6 | (Opcional) Endurecer firewall / servicios | **Si** |
+| 6 | (Opcional) Dashboard en el tray: `.\Install-Radar.ps1 -ConDashboard` | **Si** |
+| 7 | (Opcional) Endurecer firewall / servicios | **Si** |
 
 \* Sin Administrador el script funciona, pero **omite los chequeos con linea base** (tareas, exclusiones de Defender, reglas de firewall, identidad) y las amenazas activas, porque la vista del sistema cambia con el privilegio. Lo avisa por consola. La tarea programada corre elevada, asi que el chequeo completo es automatico.
 
@@ -52,11 +53,12 @@ Cuando algo cambia: **informe en `logs\`**, **evento en el Visor** y, si es **cr
 | Archivo | Que es | Se regenera |
 |---------|--------|-------------|
 | `Check-Port22.ps1` | Radar principal (los 7 chequeos). | No |
+| `Radar-Tray.ps1` | Dashboard en la bandeja del sistema (corridas, informes, control de tareas). | No |
 | `Install-Radar.ps1` | Instalador/desinstalador automatico. | No |
 | `Radar.config.psd1` | Configuracion: umbrales, estados aceptados, whitelists. | No |
 | `README.md` | Este documento. | No |
 | `.github/` | Workflow de CI y rulesets de proteccion de `main`. | No |
-| `tests/` | Tests Pester de las funciones de linea base. | No |
+| `tests/` | Tests Pester de lineas base y del dashboard. | No |
 | `PSScriptAnalyzerSettings.psd1` | Reglas excluidas del lint (a proposito). | No |
 | `LICENSE` | Licencia MIT. | No |
 | `.gitattributes` | Normalizacion de line endings (LF en repo, CRLF en scripts). | No |
@@ -581,6 +583,43 @@ Get-EventLog -LogName Application -Source "Seguridad-Port22" -EntryType Error |
 Start-ScheduledTask -TaskName "Seguridad - Revision Puerto SSH"
 ```
 
+### Dashboard en el tray (`Radar-Tray.ps1`)
+
+Icono en la bandeja del sistema con un dashboard de todas las corridas.
+
+**Instalar** (una vez, elevado):
+
+```powershell
+.\Install-Radar.ps1 -ConDashboard
+```
+
+Crea la tarea `Seguridad - Dashboard Radar` (al iniciar sesion, **sin privilegios**) y abre el icono.
+
+**Que hace**
+
+| Accion | Como |
+|--------|------|
+| Ver todas las corridas | Click izquierdo en el icono (o "Abrir dashboard") |
+| Abrir el informe de una corrida | Doble click en la fila (o Enter) |
+| Correr el radar ahora | Boton "Correr ahora" / menu del tray |
+| Pausar o reactivar el radar | Boton "Pausar/Reactivar" / menu del tray |
+| Abrir la carpeta de informes | Boton "Abrir carpeta" |
+| Salir | Menu del tray -> "Salir" |
+
+El dashboard muestra: estado de las tareas (`Ready`/`Disabled`/`Running`), cantidad de activas, ultima corrida con su resultado, proxima ejecucion y `LastTaskResult`. Las filas con criticos quedan en rojo y las de avisos en amarillo. Se refresca solo cada 20 segundos.
+
+**Privilegios**
+
+El icono corre **sin Administrador**: solo lee `logs\` y muestra ventanas. Las tres acciones que necesitan privilegios (correr, pausar, reactivar) lanzan el mismo script con **UAC** en el momento. Si cancelas el UAC, no pasa nada.
+
+**Detalles**
+
+- Instancia unica: si ya hay un icono, un segundo arranque sale solo.
+- Arranque manual: `.\Radar-Tray.ps1` (solo tray) o `.\Radar-Tray.ps1 -Mostrar` (abre el dashboard).
+- Si un informe tiene criticos y aparece uno nuevo mientras el icono esta corriendo, muestra un **globo de notificacion**.
+- El dashboard lista lo que hay en `logs\`. Las corridas anteriores a esta version solo estan en el Visor de Eventos.
+- `-SinIcono` abre solo la ventana (util para probar sin dejar el icono).
+
 ### Probar que la alerta funciona
 
 En PowerShell **como Administrador** (los chequeos con baseline se omiten sin elevacion):
@@ -692,7 +731,7 @@ Remove-Item "C:\Scripts\baseline" -Recurse -Force
 
 1. **PSScriptAnalyzer** con `Severity Error` (falla el build si hay errores).
 2. **Reporte** de advertencias (no falla, queda visible).
-3. **Pester** sobre `tests\` (11 tests de las lineas base).
+3. **Pester** sobre `tests\` (36 tests: lineas base, informes y dashboard).
 
 El job se llama exactamente **`PSScriptAnalyzer`**, que es el `context` que exige el ruleset estricto.
 
@@ -756,7 +795,7 @@ En un repo publico es gratis y es la proteccion mas rentable para este proyecto:
 - [ ] Tarea con 2 triggers, `RunLevel = Highest`, `LogonType = Interactive`.
 - [ ] `LastTaskResult = 0` y evento con la hora actual.
 - [ ] Prueba de popup: romper una baseline, ver el popup y restaurar con `-AprobarBaselines`.
-- [ ] `Invoke-Pester .\tests` pasa (11/11) y `Invoke-ScriptAnalyzer` no da errores.
+- [ ] `Invoke-Pester .\tests` pasa (36/36) y `Invoke-ScriptAnalyzer` no da errores.
 - [ ] Workflow **CI** verde tras el primer push.
 - [ ] Ruleset `main-protection` importado y **Active**.
 - [ ] Secret scanning + push protection activados en el repo.
