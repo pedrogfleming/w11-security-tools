@@ -101,7 +101,10 @@ function ConvertTo-ClaveEstable {
     param([string]$Texto)
     if ([string]::IsNullOrWhiteSpace($Texto)) { return '' }
 
-    $t = $Texto -replace '\{[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}\}', '{GUID}'
+    # GUID con o sin llaves: HNS (Hyper-V / WSL) los usa sin llaves.
+    $t = $Texto -replace '\{?[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}\}?', '{GUID}'
+    # Contador que HNS agrega detras del GUID: "HNS ... - {GUID} - 0".
+    $t = $t -replace '(\{GUID\}\s*-\s*)\d+$', '${1}<ID>'
     $t = $t -replace '\d{12,}', '<ID>'
     return $t
 }

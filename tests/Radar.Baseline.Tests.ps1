@@ -174,6 +174,20 @@ Describe 'Normalizacion de claves' {
                 Should -Be '{GUID}'
         }
 
+        It 'reemplaza GUIDs sin llaves (formato HNS)' {
+            ConvertTo-ClaveEstable -Texto 'C08CB7B8-9B3C-408E-8E30-5E16A3AEB445' |
+                Should -Be '{GUID}'
+        }
+
+        It 'normaliza el nombre completo de una regla HNS' {
+            ConvertTo-ClaveEstable -Texto 'HNS Container Networking - DNS (UDP-In) - C08CB7B8-9B3C-408E-8E30-5E16A3AEB445 - 0' |
+                Should -Be 'HNS Container Networking - DNS (UDP-In) - {GUID} - <ID>'
+        }
+
+        It 'no toca un nombre con un numero final comun' {
+            ConvertTo-ClaveEstable -Texto 'Mi Regla - 2' | Should -Be 'Mi Regla - 2'
+        }
+
         It 'reemplaza IDs numericos largos' {
             ConvertTo-ClaveEstable -Texto 'SoftLandingTriggerTask-128000000001615609-render' |
                 Should -Be 'SoftLandingTriggerTask-<ID>-render'

@@ -379,11 +379,47 @@ Windows Update y algunos instaladores (Edge, Brave, Firefox, WebView2) **borran 
 Por eso el script normaliza la clave antes de comparar (`ConvertTo-ClaveEstable`):
 
 - `{A799B4F5-3FC8-45FC-B49C-C8E8FEB9D490}` -> `{GUID}`
+- `C08CB7B8-9B3C-408E-8E30-5E16A3AEB445` -> `{GUID}` (GUID **sin llaves**, formato de HNS)
+- `HNS ... - <GUID> - 0` -> `HNS ... - {GUID} - <ID>` (contador de HNS)
 - `render-128000000001615609-...` -> `render-<ID>`
 
-Resultado: doce reglas `Microsoft Edge (mDNS-In)` con GUID distinto colapsan en **una sola clave estable**; lo mismo para las tareas de `\SoftLanding\`. Una regla o tarea **realmente nueva** (otro nombre, otra ruta, otro perfil) sigue alertando.
+Resultado: doce reglas `Microsoft Edge (mDNS-In)` con GUID distinto colapsan en **una sola clave estable**; lo mismo para las tareas de `\SoftLanding\` y para las reglas `HNS Container Networking` que el servicio de red de Hyper-V/WSL recrea con GUID y contador nuevos. Una regla o tarea **realmente nueva** (otro nombre, otra ruta, otro perfil) sigue alertando.
 
 No confundir con `Ignorar.*`, que es para **silenciar areas completas** por decision tuya. La normalizacion no oculta nada: solo evita que un GUID nuevo cuente como cambio.
+
+### Reglas `HNS Container Networking` (Hyper-V / WSL)
+
+Si usas maquinas virtuales de Hyper-V o contenedores, el servicio `hns` crea reglas de entrada que **permiten DNS (puerto 53, UDP y TCP) desde cualquier origen y en cualquier perfil**, apuntando al proxy DNS de ICS (`SharedAccess`) que escucha en `0.0.0.0:53`.
+
+- **No son malware**: son plumbing del *Default Switch* de Hyper-V. Se recrean solas; no conviene borrarlas.
+- **Si te molesta que el puerto 53 quede expuesto en la red local**, agrega una regla de bloqueo de mayor precedencia (las de bloqueo ganan a las de permiso):
+
+```powershell
+# Bloquear DNS entrante SOLO en las interfaces fisicas (el Default Switch no se toca)
+foreach ($proto in 'UDP', 'TCP') {
+    New-NetFirewallRule -DisplayName "Bloquear DNS entrante en LAN ($proto)" `
+        -Direction Inbound -Action Block -Protocol $proto -LocalPort 53 `
+        -Profile Any -InterfaceType Wired, Wireless
+}
+```
+
+- Si igual aparecen alertas por estas reglas, silencialas: `Ignorar.ReglasFirewall = @('HNS Container Networking*')`.
+
+### Reglas `Query User{...}` (prompts de firewall)
+
+Cuando Windows muestra el cartel *"Windows Security Alert"* (una aplicacion quiere abrir puertos) y se elige **Allow access**, se crean dos reglas llamadas `TCP Query User{...}<ruta.exe>` y `UDP Query User{...}<ruta.exe>`: permiten **cualquier puerto** entrante a ese ejecutable en el perfil donde se acepto (normalmente Public).
+
+Son un permiso amplio y permanente para ese programa. El radar las marca como criticas si son nuevas. Para verlas y borrarlas:
+
+```powershell
+Get-NetFirewallRule | Where-Object { $_.Name -like '*Query User*' } |
+    Select-Object DisplayName, Direction, Action, Profile
+
+# Borrar las de un programa puntual
+Get-NetFirewallRule | Where-Object { $_.Name -like '*Query User*powershell.exe' } | Remove-NetFirewallRule
+```
+
+> Si preferis que Windows no vuelva a preguntar por cada programa, no marques "Allow access" a ciegas: primero mira que ejecutable y que perfil (Public) esta pidiendo.
 
 ### Lineas base
 
@@ -458,6 +494,8 @@ Get-NetFirewallRule -Direction Inbound -Enabled True -Action Allow |
 
 Si no la reconoces: `Disable-NetFirewallRule -Name "<Name>"`.
 Si es legitima: `& "C:\Scripts\Check-Port22.ps1" -AprobarBaselines`.
+
+> Antes de aprobar, mira el **nombre**: `HNS Container Networking ...` es de Hyper-V/WSL (normal, ver seccion 4) y `Query User{...}<exe>` es un permiso que se acepto en el cartel de Windows Firewall (amplio y permanente: revisalo).
 
 ### RDP / WinRM habilitados sin querer
 
@@ -839,7 +877,10 @@ function ConvertTo-ClaveEstable {
     param([string]$Texto)
     if ([string]::IsNullOrWhiteSpace($Texto)) { return '' }
 
-    $t = $Texto -replace '\{[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}\}', '{GUID}'
+    # GUID con o sin llaves: HNS (Hyper-V / WSL) los usa sin llaves.
+    $t = $Texto -replace '\{?[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}\}?', '{GUID}'
+    # Contador que HNS agrega detras del GUID: "HNS ... - {GUID} - 0".
+    $t = $t -replace '(\{GUID\}\s*-\s*)\d+$', '${1}<ID>'
     $t = $t -replace '\d{12,}', '<ID>'
     return $t
 }
