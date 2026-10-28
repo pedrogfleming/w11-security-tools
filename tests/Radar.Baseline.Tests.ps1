@@ -24,11 +24,18 @@ BeforeAll {
         . ([scriptblock]::Create($f.Extent.Text))
     }
 
-    foreach ($nombre in @('Read-Baseline', 'Write-Baseline', 'Compare-ConBaseline')) {
+    foreach ($nombre in @('Read-Baseline', 'Write-Baseline', 'Compare-ConBaseline', 'Write-InformeEjecucion')) {
         if (-not (Get-Command $nombre -ErrorAction SilentlyContinue)) {
             throw "No se encontro la funcion '$nombre' en Check-Port22.ps1."
         }
     }
+
+    # Variables de script que usan las funciones extraidas.
+    $script:logsDir = Join-Path ([System.IO.Path]::GetTempPath()) 'radar-test-logs'
+    $script:logType = 'Application'
+    $script:eventoLog = 'Seguridad-Port22'
+    $script:EsAdmin = $true
+    $script:Config = @{ RetencionInformes = 60; AbrirDetalleCon = '' }
 }
 
 Describe 'Lineas base del radar' {
@@ -210,3 +217,91 @@ Describe 'Normalizacion de claves' {
         }
     }
 }
+
+Describe 'Informe de ejecucion' {
+
+    BeforeEach {
+        $script:dirInformes = Join-Path ([System.IO.Path]::GetTempPath()) ("radar-informes-" + [guid]::NewGuid().ToString('N'))
+        $script:Config = @{ RetencionInformes = 60; AbrirDetalleCon = '' }
+    }
+
+    AfterEach {
+        if ($script:dirInformes -and (Test-Path $script:dirInformes)) {
+            Remove-Item -Path $script:dirInformes -Recurse -Force
+        }
+    }
+
+    It 'crea el archivo y devuelve la ruta' {
+        $ruta = Write-InformeEjecucion -Mensaje 'Radar OK: sin hallazgos.' `
+            -EventId 1000 -TipoEvento Information -Resumen '0 criticos, 0 avisos' `
+            -Directorio $script:dirInformes
+
+        $ruta | Should -Exist
+        (Split-Path $ruta -Leaf) | Should -Match '^radar-\d{8}-\d{6}\.log$'
+    }
+
+    It 'incluye el evento, el resumen y el mensaje' {
+        $ruta = Write-InformeEjecucion -Mensaje 'CRITICOS (1):' `
+            -EventId 1001 -TipoEvento Error -Resumen '1 criticos, 0 avisos' `
+            -Directorio $script:dirInformes
+
+        $texto = Get-Content $ruta -Raw
+        $texto | Should -Match 'ID 1001 \(Error\)'
+        $texto | Should -Match '1 criticos, 0 avisos'
+        $texto | Should -Match 'CRITICOS \(1\):'
+    }
+
+    It 'agrupa los hallazgos por severidad' {
+        $hallazgos = @(
+            [pscustomobject]@{ Severidad = 'Aviso';   Area = 'Firewall'; Detalle = 'aviso uno' },
+            [pscustomobject]@{ Severidad = 'Critico'; Area = 'SSH';      Detalle = 'critico uno' },
+            [pscustomobject]@{ Severidad = 'Info';    Area = 'Firewall'; Detalle = 'info uno' }
+        )
+
+        $ruta = Write-InformeEjecucion -Hallazgos $hallazgos -Directorio $script:dirInformes
+        $texto = Get-Content $ruta -Raw
+
+        $texto | Should -Match 'CRITICOS \(1\)\r?\n  - SSH: critico uno'
+        $texto | Should -Match 'AVISOS \(1\)\r?\n  - Firewall: aviso uno'
+        $texto | Should -Match 'INFORMATIVOS \(1\)\r?\n  - Firewall: info uno'
+        ($texto.IndexOf('CRITICOS')) | Should -BeLessThan ($texto.IndexOf('AVISOS'))
+    }
+
+    It 'marca el resumen como sin hallazgos cuando todo es informativo' {
+        $ruta = Write-InformeEjecucion -Hallazgos @(
+            [pscustomobject]@{ Severidad = 'Info'; Area = 'SSH'; Detalle = 'sin sshd' }
+        ) -Directorio $script:dirInformes
+
+        Get-Content $ruta -Raw | Should -Match 'Sin hallazgos'
+    }
+
+    It 'no pisa un informe existente de la misma corrida' {
+        $a = Write-InformeEjecucion -Mensaje 'uno' -Directorio $script:dirInformes
+        $b = Write-InformeEjecucion -Mensaje 'dos' -Directorio $script:dirInformes
+
+        $a | Should -Not -Be $b
+        $a | Should -Exist
+        $b | Should -Exist
+    }
+
+    It 'respeta la retencion configurada' {
+        New-Item -ItemType Directory -Path $script:dirInformes -Force | Out-Null
+        1..5 | ForEach-Object {
+            $f = Join-Path $script:dirInformes ("radar-2026010{0}-000000.log" -f $_)
+            Set-Content -Path $f -Value 'viejo' -Encoding ASCII
+            (Get-Item $f).LastWriteTime = (Get-Date).AddDays(-10 + $_)
+        }
+        $script:Config.RetencionInformes = 2
+
+        Write-InformeEjecucion -Mensaje 'nuevo' -Directorio $script:dirInformes | Out-Null
+
+        @(Get-ChildItem -Path $script:dirInformes -Filter 'radar-*.log').Count | Should -Be 2
+    }
+
+    It 'no falla si el directorio no existe' {
+        $dir = Join-Path $script:dirInformes 'sub'
+        { Write-InformeEjecucion -Mensaje 'x' -Directorio $dir } | Should -Not -Throw
+        @(Get-ChildItem -Path $dir -Filter 'radar-*.log').Count | Should -Be 1
+    }
+}
+

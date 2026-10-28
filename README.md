@@ -10,7 +10,7 @@ Monitoreo diario de la superficie de ataque de un equipo Windows 11:
 6. **Acceso remoto**: RDP y WinRM habilitados sin querer.
 7. **Identidad**: administradores/usuarios locales nuevos, cuentas integradas, autologon, UAC y WDigest.
 
-Cuando algo cambia: **evento en el Visor de Eventos** y, si es **critico**, **popup en pantalla**.
+Cuando algo cambia: **informe en `logs\`**, **evento en el Visor** y, si es **critico**, **popup en pantalla** con el detalle y un link al informe.
 
 > El script **detecta y avisa**, no bloquea. La accion correctiva es tuya (seccion 5).
 > Fase 1 cubre Defender, Firewall, RDP/WinRM e Identidad. Persistencia avanzada, red y eventos (4625/1102) quedan para la fase 2.
@@ -61,6 +61,7 @@ Cuando algo cambia: **evento en el Visor de Eventos** y, si es **critico**, **po
 | `LICENSE` | Licencia MIT. | No |
 | `.gitattributes` | Normalizacion de line endings (LF en repo, CRLF en scripts). | No |
 | `baseline\*.json` | Lineas base por chequeo (se crean solas, con claves normalizadas). | Si |
+| `logs\radar-*.log` | Informe de cada corrida (lo abre el popup con un click). | Si |
 | `Firewall.md` | Comando opcional de endurecimiento. | No |
 | `Tareas_Referencia.txt` | **Obsoleto** (version vieja). Se puede borrar. | No |
 
@@ -122,7 +123,7 @@ Se puede correr las veces que quieras: el estado final es el mismo.
 | Cambiar `-TaskName` | Crea otra tarea; la anterior queda y hay que borrarla a mano. |
 | `-Uninstall` repetido | La segunda vez avisa que ya no existe; no falla. |
 
-Lo unico que **no** es idempotente es el tiempo: cada ejecucion agrega eventos al Visor y, si hay criticos, muestra popup. Los pasos manuales que siguen son el equivalente detallado del instalador (utiles para entender o reparar a mano).
+Lo unico que **no** es idempotente es el tiempo: cada ejecucion agrega eventos al Visor, deja un informe en `logs\` y, si hay criticos, muestra popup. Los pasos manuales que siguen son el equivalente detallado del instalador (utiles para entender o reparar a mano).
 
 ### Paso 1 - Crear la carpeta y copiar los archivos
 
@@ -325,18 +326,43 @@ auditpol /set /subcategory:"Process Creation" /success:enable
 | Solo avisos | Warning | 1002 | No (por defecto) |
 | Al menos un critico | Error | 1001 | **Si** |
 
-El popup muestra los criticos y el conteo de avisos. Los avisos siempre quedan en el Visor de Eventos.
+El popup muestra **el detalle completo** de criticos y avisos (con scroll), tiene un boton **Copiar** y, abajo, el **path del informe como link**: un click abre el `.log` de esa corrida en Notepad, sin pasar por el Visor de Eventos.
+
 Si queres popup tambien para avisos, cambia en `Radar.config.psd1`:
 
 ```powershell
 PopupSoloCritico = $false
 ```
 
+### Informe de cada corrida (`logs\`)
+
+Cada corrida deja un archivo `logs\radar-AAAAMMDD-HHMMSS.log` con:
+
+- fecha, equipo, usuario y si corrio elevado;
+- el evento escrito (log, source, ID, tipo);
+- los hallazgos agrupados por severidad (**criticos**, **avisos**, **informativos**);
+- el mensaje exacto que quedo en el Event Log;
+- los comandos para aprobar las novedades.
+
+El mismo path se agrega al final del evento en el Visor, asi que tambien se puede llegar al archivo desde ahi.
+
+Se conservan los ultimos `RetencionInformes` (60 por defecto) y el resto se borra solo. `logs\` esta en `.gitignore`.
+
+Para abrir el ultimo informe sin correr nada:
+
+```powershell
+.\Check-Port22.ps1 -AbrirUltimo
+```
+
+O desde el Explorador: `C:\Scripts\logs\` (ordenado por fecha).
+
 ### Configuracion (`Radar.config.psd1`)
 
 | Clave | Default | Significado |
 |-------|---------|-------------|
 | `PopupSoloCritico` | `$true` | Solo criticos abren popup. |
+| `RetencionInformes` | `60` | Cuantos `.log` se conservan en `logs\` (`0` = sin limite). |
+| `AbrirDetalleCon` | `'notepad.exe'` | Programa que abre el informe al clickear el path. `''` = asociacion de Windows (ojo: `.log` no siempre tiene), `'code.cmd'` = VS Code. |
 | `Umbrales.DiasFirmaDefender` | `4` | Dias maximos de antiguedad de firmas. |
 | `Aceptados.RDP` | `$false` | `$true` si usas Escritorio Remoto a proposito. |
 | `Aceptados.WinRM` | `$false` | `$true` si usas WinRM a proposito. |
@@ -496,7 +522,16 @@ Si la reconoces: `-AprobarTareas`. Si no: `Unregister-ScheduledTask -TaskName "<
 # Aceptar solo tareas nuevas
 & "C:\Scripts\Check-Port22.ps1" -AprobarTareas
 
-# Ver hallazgos recientes
+# Abrir el informe de la ultima corrida (sin correr chequeos)
+& "C:\Scripts\Check-Port22.ps1" -AbrirUltimo
+
+# Ver el ultimo informe sin abrirlo
+Get-ChildItem "C:\Scripts\logs\radar-*.log" |
+    Sort-Object LastWriteTime -Descending |
+    Select-Object -First 1 |
+    Get-Content
+
+# Ver hallazgos recientes (Event Log)
 Get-EventLog -LogName Application -Source "Seguridad-Port22" -Newest 10 |
     Format-Table TimeGenerated, EntryType, EventId, Message -AutoSize -Wrap
 
@@ -538,13 +573,15 @@ $o.items = @($o.items)[1..(@($o.items).Count-1)]
 | `Sin Administrador: se omiten los chequeos con linea base` | Corrida sin elevar | Esperado. Para el chequeo completo: `Start-ScheduledTask` o PowerShell elevado. |
 | `No se pudo crear ...\baseline` | Carpeta sin permisos de escritura | Mover el proyecto a una carpeta del usuario o dar permisos. |
 | `Radar.config.psd1 invalido` | Error de sintaxis en la config | Validar con `Import-PowerShellDataFile .\Radar.config.psd1`. |
-| Avisos diarios pero **ningun popup** | Por diseno (`PopupSoloCritico = $true`) | Revisar ID 1002 en el Visor o poner `PopupSoloCritico = $false`. |
+| Avisos diarios pero **ningun popup** | Por diseno (`PopupSoloCritico = $true`) | Abrir el informe de `logs\` (`-AbrirUltimo`), revisar el ID 1002 en el Visor o poner `PopupSoloCritico = $false`. |
 | Critico eterno de RDP/WinRM | Los usas a proposito | `Aceptados.RDP = $true` / `Aceptados.WinRM = $true`. |
 | Critico de una regla de firewall legitima | Windows/software agrego una regla | `-AprobarBaselines` o `Ignorar.ReglasFirewall` (acepta comodines). |
 | Critico diario por `Microsoft Edge (mDNS-In)` / `Brave (mDNS-In)` / `Firefox` despues de actualizar el navegador | Version vieja del script: la baseline guardaba el GUID del `Name`, que el navegador regenera en cada update | Actualizar `Check-Port22.ps1` (normaliza GUIDs) y borrar `baseline\firewall-reglas.json` para que se regenere. |
 | Aviso diario por tareas `\SoftLanding\S-1-5-...` | Componente SoftLanding de Windows Update: recrea sus tareas con GUID/ID nuevos | Ya excluido por `Ignorar.TareasPath = @('\SoftLanding\*')`. Si usas una version vieja, actualizala. |
 | `Register-ScheduledTask : ... ya existe` | Tarea duplicada | Reejecutar `Install-Radar.ps1` (usa `-Force`). |
-| La tarea corre pero no hay popup | Sesion bloqueada o cerrada | El popup aparece en sesion interactiva; el evento queda igual. |
+| La tarea corre pero no hay popup | Sesion bloqueada o cerrada | El popup aparece en sesion interactiva; el informe queda igual en `logs\`. |
+| El link del popup no abre nada | El programa configurado en `AbrirDetalleCon` no existe | Corregir `AbrirDetalleCon` (`'notepad.exe'` siempre funciona) o poner `''` para usar la asociacion de Windows. El path tambien se puede copiar con el boton **Copiar**. |
+| Quiero ver que paso sin abrir el Visor de Eventos | - | `.\Check-Port22.ps1 -AbrirUltimo` abre el informe de la ultima corrida. |
 | La tarea queda `Running` para siempre y `LastTaskResult = 267009` | Algun comando abrio un prompt (tipico: proveedor `WSMan:\` ofreciendo iniciar WinRM) en la ventana oculta | Corregido: el script ya no usa `WSMan:\` y la tarea corre con `-NonInteractive`. Detener la tarea colgada (ver abajo) y reinstalar. |
 | Pregunta `Start WinRM Service ... Do you want to continue?` al correr el radar | Version vieja del chequeo de WinRM accedia a `WSMan:\localhost\Listener` | Actualizar `Check-Port22.ps1` y reinstalar. Responder `N` no cambia nada. |
 | `Install-Radar.ps1` parece no hacer nada | Se relanzo elevado en otra ventana | Aceptar el UAC y mirar la ventana nueva. |
@@ -707,6 +744,7 @@ MIT. Ver [`LICENSE`](LICENSE).
 # Uso:
 #   .\Check-Port22.ps1                  # corrida normal
 #   .\Check-Port22.ps1 -SinPopup        # prueba: no muestra popup
+#   .\Check-Port22.ps1 -AbrirUltimo     # abre el ultimo informe de logs\ y sale
 #   .\Check-Port22.ps1 -AprobarBaselines # acepta TODAS las novedades como conocidas
 #   .\Check-Port22.ps1 -AprobarTareas    # solo tareas programadas
 # ==========================================
@@ -714,12 +752,14 @@ MIT. Ver [`LICENSE`](LICENSE).
 param(
     [switch]$AprobarTareas,
     [switch]$AprobarBaselines,
-    [switch]$SinPopup
+    [switch]$SinPopup,
+    [switch]$AbrirUltimo
 )
 
 $eventoLog      = "Seguridad-Port22"
 $logType        = "Application"
 $script:baseDir = Join-Path $PSScriptRoot "baseline"
+$script:logsDir = Join-Path $PSScriptRoot "logs"
 $refTareasTxt   = Join-Path $PSScriptRoot "tareas_baseline.txt"
 
 $script:AprobarTodo   = [bool]$AprobarBaselines
@@ -730,6 +770,13 @@ $script:AprobarTareas = ([bool]$AprobarTareas -or [bool]$AprobarBaselines)
 # ---------------------------------------------------------
 $config = @{
     PopupSoloCritico = $true
+    # Cuantos informes .log se conservan en logs\ (0 = sin limite)
+    RetencionInformes = 60
+    # Programa con el que se abre el informe desde el popup.
+    # 'notepad.exe' = Notepad (siempre disponible, recomendado)
+    # ''            = aplicacion asociada de Windows (puede no existir para .log)
+    # 'code.cmd'    = VS Code, si esta en el PATH
+    AbrirDetalleCon = 'notepad.exe'
     Umbrales = @{
         DiasFirmaDefender = 4
     }
@@ -886,6 +933,268 @@ function Write-LogSeguridad {
             -EntryType $Tipo -Message $Mensaje -ErrorAction Stop
     } catch {
         Write-Warning "No se pudo escribir en el Event Log: $($_.Exception.Message)"
+    }
+}
+
+# ---------------------------------------------------------
+# Informe de ejecucion en archivo (para no abrir el Visor de Eventos)
+# ---------------------------------------------------------
+function Write-InformeEjecucion {
+    param(
+        [string]$Mensaje = '',
+        [int]$EventId = 1000,
+        [string]$TipoEvento = 'Information',
+        [string]$Resumen = '',
+        $Hallazgos = @(),
+        [string]$Directorio = $script:logsDir
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Directorio)) {
+        $Directorio = Join-Path $PSScriptRoot 'logs'
+    }
+
+    try {
+        if (-not (Test-Path $Directorio)) {
+            New-Item -ItemType Directory -Path $Directorio -Force | Out-Null
+        }
+
+        $ahora = Get-Date
+        $marca = $ahora.ToString('yyyyMMdd-HHmmss')
+        $ruta = Join-Path $Directorio "radar-$marca.log"
+        $n = 1
+        while (Test-Path $ruta) {
+            $ruta = Join-Path $Directorio "radar-$marca-$n.log"
+            $n++
+        }
+
+        $sep = '=' * 66
+        $lineas = @()
+        $lineas += $sep
+        $lineas += ' RADAR DE SEGURIDAD - INFORME DE EJECUCION'
+        $lineas += $sep
+        $lineas += "Fecha     : $($ahora.ToString('dd/MM/yyyy HH:mm:ss'))"
+        $lineas += "Equipo    : $env:COMPUTERNAME"
+        $lineas += "Usuario   : $env:USERNAME"
+        $elevado = 'No'
+        if ($script:EsAdmin) { $elevado = 'Si' }
+        $lineas += "Elevado   : $elevado"
+        $lineas += "Evento    : $logType / $eventoLog / ID $EventId ($TipoEvento)"
+        if ($Resumen) { $lineas += "Resultado : $Resumen" }
+        $lineas += ''
+
+        $grupos = @(
+            @{ Nombre = 'CRITICOS';    Severidad = 'Critico' },
+            @{ Nombre = 'AVISOS';      Severidad = 'Aviso' },
+            @{ Nombre = 'INFORMATIVOS'; Severidad = 'Info' }
+        )
+        foreach ($g in $grupos) {
+            $items = @($Hallazgos | Where-Object { $_.Severidad -eq $g.Severidad })
+            if ($items.Count -eq 0) { continue }
+            $lineas += "$($g.Nombre) ($($items.Count))"
+            foreach ($h in $items) { $lineas += "  - $($h.Area): $($h.Detalle)" }
+            $lineas += ''
+        }
+
+        if (-not ($Hallazgos | Where-Object { $_.Severidad -ne 'Info' })) {
+            $lineas += 'Sin hallazgos: el equipo mantiene la configuracion esperada.'
+            $lineas += ''
+        }
+
+        $lineas += $sep
+        $lineas += 'Mensaje registrado en el Event Log:'
+        $lineas += $sep
+        foreach ($l in ($Mensaje -split "`r?`n")) { $lineas += $l }
+        $lineas += ''
+        $lineas += $sep
+        $lineas += 'Para aceptar las novedades como conocidas:'
+        $lineas += '  .\Check-Port22.ps1 -AprobarBaselines'
+        $lineas += '  .\Check-Port22.ps1 -AprobarTareas     (solo tareas programadas)'
+        $lineas += $sep
+
+        [System.IO.File]::WriteAllLines($ruta, [string[]]$lineas, (New-Object System.Text.UTF8Encoding($false)))
+
+        # Retencion: conserva los N informes mas recientes.
+        $retencion = 60
+        if ($script:Config -and $script:Config.ContainsKey('RetencionInformes')) {
+            $retencion = [int]$script:Config.RetencionInformes
+        }
+        if ($retencion -gt 0) {
+            $viejos = @(Get-ChildItem -Path $Directorio -Filter 'radar-*.log' -File -ErrorAction SilentlyContinue |
+                Sort-Object LastWriteTime -Descending |
+                Select-Object -Skip $retencion)
+            foreach ($v in $viejos) { Remove-Item -Path $v.FullName -Force -ErrorAction SilentlyContinue }
+        }
+
+        return $ruta
+    } catch {
+        Write-Warning "No se pudo escribir el informe de ejecucion: $($_.Exception.Message)"
+        return $null
+    }
+}
+
+# Abre el informe con la aplicacion asociada. Se usa explorer.exe a proposito:
+# hereda la sesion del usuario y NO la elevacion, asi el visor no corre como admin.
+function Open-InformeRadar {
+    param([string]$Ruta)
+
+    if ([string]::IsNullOrWhiteSpace($Ruta) -or -not (Test-Path $Ruta)) {
+        Write-Warning "El informe no existe: $Ruta"
+        return
+    }
+
+    $exe = ''
+    if ($script:Config -and $script:Config.ContainsKey('AbrirDetalleCon')) {
+        $exe = [string]$script:Config.AbrirDetalleCon
+    }
+
+    try {
+        if ([string]::IsNullOrWhiteSpace($exe)) {
+            Start-Process -FilePath 'explorer.exe' -ArgumentList "`"$Ruta`""
+        } else {
+            Start-Process -FilePath $exe -ArgumentList "`"$Ruta`""
+        }
+    } catch {
+        try {
+            Start-Process -FilePath 'notepad.exe' -ArgumentList "`"$Ruta`""
+        } catch {
+            Write-Warning "No se pudo abrir el informe: $($_.Exception.Message)"
+        }
+    }
+}
+
+# ---------------------------------------------------------
+# Popup con el detalle y un link al informe completo
+# ---------------------------------------------------------
+function Show-PopupRadar {
+    param(
+        [string]$Titulo = 'RADAR DE SEGURIDAD',
+        [string]$Texto = '',
+        [string]$RutaInforme = ''
+    )
+
+    try {
+        Add-Type -AssemblyName System.Windows.Forms -ErrorAction Stop
+        Add-Type -AssemblyName System.Drawing -ErrorAction Stop
+    } catch {
+        Write-Warning "No se pudo cargar WinForms: $($_.Exception.Message)"
+        return
+    }
+
+    $hayInforme = (-not [string]::IsNullOrWhiteSpace($RutaInforme)) -and (Test-Path $RutaInforme)
+
+    # Coordenadas precalculadas: dentro de un New-Object(...) no se puede
+    # usar aritmetica sin parentesis (PowerShell la parsea como argumento suelto).
+    $anchoForm = 700
+    $altoForm = 490
+    $xLink = 86
+    $anchoLink = 372
+    $yLink = 434
+    $yBotones = 429
+    $xBotones = 470
+
+    try {
+        $form = New-Object System.Windows.Forms.Form
+        $form.Text = $Titulo
+        $form.StartPosition = 'CenterScreen'
+        $form.FormBorderStyle = 'FixedDialog'
+        $form.MaximizeBox = $false
+        $form.MinimizeBox = $false
+        $form.ShowInTaskbar = $true
+        $form.TopMost = $true
+        $form.ClientSize = New-Object System.Drawing.Size($anchoForm, $altoForm)
+        $form.Font = New-Object System.Drawing.Font('Segoe UI', 9)
+
+        $lblTitulo = New-Object System.Windows.Forms.Label
+        $lblTitulo.Text = $Titulo
+        $lblTitulo.Font = New-Object System.Drawing.Font('Segoe UI', 11, [System.Drawing.FontStyle]::Bold)
+        $lblTitulo.ForeColor = [System.Drawing.Color]::FromArgb(160, 20, 20)
+        $lblTitulo.AutoSize = $true
+        $lblTitulo.Location = New-Object System.Drawing.Point(16, 12)
+        $form.Controls.Add($lblTitulo)
+
+        $txt = New-Object System.Windows.Forms.TextBox
+        $txt.Multiline = $true
+        $txt.ReadOnly = $true
+        $txt.ScrollBars = 'Both'
+        $txt.WordWrap = $false
+        $txt.BackColor = [System.Drawing.Color]::White
+        $txt.Font = New-Object System.Drawing.Font('Consolas', 9)
+        $txt.Location = New-Object System.Drawing.Point(16, 42)
+        $txt.Size = New-Object System.Drawing.Size(668, 380)
+        $txt.Text = ($Texto -replace "`r?`n", "`r`n")
+        $form.Controls.Add($txt)
+
+        if ($hayInforme) {
+            $script:RutaInformePopup = $RutaInforme
+
+            # Etiqueta corta a la izquierda y el PATH como link clickeable.
+            $lblInforme = New-Object System.Windows.Forms.Label
+            $lblInforme.Text = 'Informe:'
+            $lblInforme.AutoSize = $true
+            $lblInforme.ForeColor = [System.Drawing.Color]::DimGray
+            $lblInforme.Location = New-Object System.Drawing.Point(16, $yLink)
+            $form.Controls.Add($lblInforme)
+
+            $lnk = New-Object System.Windows.Forms.LinkLabel
+            $lnk.Text = $RutaInforme
+            $lnk.Location = New-Object System.Drawing.Point($xLink, $yLink)
+            $lnk.Size = New-Object System.Drawing.Size($anchoLink, 18)
+            $lnk.AutoEllipsis = $true
+            $lnk.LinkColor = [System.Drawing.Color]::FromArgb(0, 90, 200)
+            $lnk.ActiveLinkColor = [System.Drawing.Color]::FromArgb(200, 60, 0)
+            $lnk.Add_LinkClicked({ Open-InformeRadar -Ruta $script:RutaInformePopup })
+
+            $tip = New-Object System.Windows.Forms.ToolTip
+            $tip.SetToolTip($lnk, "Click para abrir:`n$RutaInforme")
+            $form.Controls.Add($lnk)
+        } else {
+            $lblSin = New-Object System.Windows.Forms.Label
+            $lblSin.Text = 'Sin informe en archivo para esta corrida.'
+            $lblSin.AutoSize = $true
+            $lblSin.ForeColor = [System.Drawing.Color]::DimGray
+            $lblSin.Location = New-Object System.Drawing.Point(16, $yLink)
+            $form.Controls.Add($lblSin)
+        }
+
+        $btnCopiar = New-Object System.Windows.Forms.Button
+        $btnCopiar.Text = 'Copiar'
+        $btnCopiar.Size = New-Object System.Drawing.Size(90, 30)
+        $btnCopiar.Location = New-Object System.Drawing.Point($xBotones, $yBotones)
+        $btnCopiar.Add_Click({
+            try {
+                [System.Windows.Forms.Clipboard]::SetText($txt.Text)
+            } catch {
+                Write-Warning "No se pudo copiar al portapapeles: $($_.Exception.Message)"
+            }
+        })
+        $form.Controls.Add($btnCopiar)
+
+        $xCopiar = $xBotones
+        $xCerrar = $xCopiar + 100
+        $btnCerrar = New-Object System.Windows.Forms.Button
+        $btnCerrar.Text = 'Cerrar'
+        $btnCerrar.Size = New-Object System.Drawing.Size(90, 30)
+        $btnCerrar.Location = New-Object System.Drawing.Point($xCerrar, $yBotones)
+        $btnCerrar.DialogResult = [System.Windows.Forms.DialogResult]::OK
+        $form.AcceptButton = $btnCerrar
+        $form.CancelButton = $btnCerrar
+        $form.Controls.Add($btnCerrar)
+
+        $form.Add_Shown({ $form.Activate() })
+        [void]$form.ShowDialog()
+        $form.Dispose()
+    } catch {
+        # Si WinForms falla, siempre queda el aviso clasico.
+        Write-Warning "No se pudo mostrar la ventana con link: $($_.Exception.Message)"
+        try {
+            [System.Windows.Forms.MessageBox]::Show(
+                $Texto + "`n`nInforme: $RutaInforme",
+                $Titulo,
+                [System.Windows.Forms.MessageBoxButtons]::OK,
+                [System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
+        } catch {
+            Write-Output "$Titulo`n$Texto"
+        }
     }
 }
 
@@ -1219,6 +1528,20 @@ function Test-Identidad {
 # ---------------------------------------------------------
 # Ejecucion
 # ---------------------------------------------------------
+# Atajo: abrir el ultimo informe guardado y salir sin correr chequeos.
+if ($AbrirUltimo) {
+    $ultimo = Get-ChildItem -Path $script:logsDir -Filter 'radar-*.log' -File -ErrorAction SilentlyContinue |
+        Sort-Object LastWriteTime -Descending |
+        Select-Object -First 1
+    if (-not $ultimo) {
+        Write-Output "No hay informes en $script:logsDir. Corre el radar al menos una vez."
+        return
+    }
+    Write-Output "Ultimo informe: $($ultimo.FullName)"
+    Open-InformeRadar -Ruta $ultimo.FullName
+    return
+}
+
 Initialize-BaseDir
 
 if (-not $script:EsAdmin) {
@@ -1267,13 +1590,24 @@ if ($avisos.Count -gt 0) {
 if ($partes.Count -eq 0) { $partes = @('Radar OK: sin hallazgos.') }
 $mensajeEvento = $partes -join "`n"
 
+$eventId = 1000
+$tipoEvento = 'Information'
 if ($criticos.Count -gt 0) {
-    Write-LogSeguridad -Mensaje $mensajeEvento -Tipo Error -Id 1001
+    $eventId = 1001
+    $tipoEvento = 'Error'
 } elseif ($avisos.Count -gt 0) {
-    Write-LogSeguridad -Mensaje $mensajeEvento -Tipo Warning -Id 1002
-} else {
-    Write-LogSeguridad -Mensaje $mensajeEvento -Tipo Information -Id 1000
+    $eventId = 1002
+    $tipoEvento = 'Warning'
 }
+
+# --- Informe en archivo (el popup lo abre con un click) ---
+$resumen = "$($criticos.Count) criticos, $($avisos.Count) avisos, $($infos.Count) informativos"
+$rutaInforme = Write-InformeEjecucion -Mensaje $mensajeEvento -EventId $eventId `
+    -TipoEvento $tipoEvento -Resumen $resumen -Hallazgos $hallazgos
+
+$mensajeConRuta = $mensajeEvento
+if ($rutaInforme) { $mensajeConRuta += "`n`nInforme completo: $rutaInforme" }
+Write-LogSeguridad -Mensaje $mensajeConRuta -Tipo $tipoEvento -Id $eventId
 
 # --- Popup ---
 $mostrarPopup = $false
@@ -1287,33 +1621,34 @@ if ($SinPopup) { $mostrarPopup = $false }
 if ($mostrarPopup) {
     $lineasPopup = @()
     if ($criticos.Count -gt 0) {
-        $lineasPopup += "CRITICOS:"
+        $lineasPopup += "CRITICOS ($($criticos.Count)):"
         $criticos | ForEach-Object { $lineasPopup += " - $($_.Area): $($_.Detalle)" }
+        $lineasPopup += ''
     }
     if ($avisos.Count -gt 0) {
-        $lineasPopup += ""
-        $lineasPopup += "Avisos: $($avisos.Count) (ver Visor de Eventos, ID 1002)"
-    }
-    if ($lineasPopup.Count -gt 18) {
-        $resto = $lineasPopup.Count - 17
-        $lineasPopup = @($lineasPopup[0..16]) + "... y $resto mas (ver Visor de Eventos)"
+        $lineasPopup += "AVISOS ($($avisos.Count)):"
+        $avisos | ForEach-Object { $lineasPopup += " - $($_.Area): $($_.Detalle)" }
+        $lineasPopup += ''
     }
 
-    $texto = ($lineasPopup -join "`n") + "`n`nRevisar y actuar."
-    Add-Type -AssemblyName System.Windows.Forms
-    [System.Windows.Forms.MessageBox]::Show(
-        $texto,
-        "RADAR DE SEGURIDAD",
-        [System.Windows.Forms.MessageBoxButtons]::OK,
-        [System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
+    # Techo defensivo: el detalle completo queda en el archivo.
+    if ($lineasPopup.Count -gt 300) {
+        $resto = $lineasPopup.Count - 299
+        $lineasPopup = @($lineasPopup[0..298]) + "... y $resto lineas mas (ver informe completo)"
+    }
+
+    $textoPopup = ($lineasPopup -join "`n") + "`nRevisar y actuar."
+    Show-PopupRadar -Titulo 'RADAR DE SEGURIDAD' -Texto $textoPopup -RutaInforme $rutaInforme
 }
 
 # --- Consola ---
 if ($criticos.Count -eq 0 -and $avisos.Count -eq 0) {
     Write-Output "RADAR OK: sin amenazas detectadas ($($infos.Count) informativos)."
 } else {
-    Write-Output "RADAR: $($criticos.Count) criticos, $($avisos.Count) avisos. Evento ID $(if ($criticos.Count) { 1001 } else { 1002 })."
+    Write-Output "RADAR: $($criticos.Count) criticos, $($avisos.Count) avisos. Evento ID $eventId."
 }
+if ($rutaInforme) { Write-Output "Informe: $rutaInforme" }
+
 ```
 
 ## Apendice B - Configuracion (`Radar.config.psd1`)
@@ -1328,6 +1663,16 @@ if ($criticos.Count -eq 0 -and $avisos.Count -eq 0) {
     # $true  = solo los hallazgos CRITICOS abren popup (recomendado, evita fatiga)
     # $false = los AVISOS tambien abren popup
     PopupSoloCritico = $true
+
+    # Cuantos informes se conservan en logs\ (cada corrida deja un .log con el
+    # detalle completo). 0 = sin limite.
+    RetencionInformes = 60
+
+    # Programa con el que el popup abre el informe al hacer click en el path.
+    # 'notepad.exe' = Notepad (siempre disponible; recomendado)
+    # ''            = aplicacion asociada de Windows (ojo: .log no siempre tiene)
+    # 'code.cmd'    = VS Code, si esta en el PATH
+    AbrirDetalleCon = 'notepad.exe'
 
     Umbrales = @{
         # Dias de antiguedad maxima de las firmas de Defender antes de avisar
@@ -1344,15 +1689,20 @@ if ($criticos.Count -eq 0 -and $avisos.Count -eq 0) {
     # Procesos que pueden escuchar en la red sin generar aviso
     ProcesosPermitidos = @(
         'svchost','lsass','System','smss','csrss','services','wininit','winlogon',
-        'dwm','RuntimeBroker','SearchIndexer','MsMpEng','NisSrv','vmms'
+        'dwm','RuntimeBroker','SearchIndexer','MsMpEng','NisSrv','vmms','steam'
     )
 
     Ignorar = @{
         # Patrones (con comodines * y ?) sobre Name o DisplayName de la regla.
-        # Ejemplos: 'Microsoft Edge*', 'Brave*', 'Firefox*', '*mDNS*'
+        # Sirven para silenciar reglas conocidas y ruidosas, por ejemplo:
+        #   'Microsoft Edge*', 'Brave*', 'Firefox*', '*mDNS*'
+        # Por defecto vacio: las reglas de navegadores ya no generan falsos
+        # positivos porque el script normaliza los GUIDs del Name.
         ReglasFirewall = @()
 
         # Patrones (con comodines) sobre el TaskPath de tareas programadas.
+        # SoftLanding es un componente de Windows Update que recrea sus tareas
+        # con GUIDs nuevos en cada ciclo de actualizacion.
         TareasPath = @('\SoftLanding\*')
     }
 }

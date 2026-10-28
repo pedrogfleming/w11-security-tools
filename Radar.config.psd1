@@ -8,6 +8,16 @@
     # $false = los AVISOS tambien abren popup
     PopupSoloCritico = $true
 
+    # Cuantos informes se conservan en logs\ (cada corrida deja un .log con el
+    # detalle completo). 0 = sin limite.
+    RetencionInformes = 60
+
+    # Programa con el que el popup abre el informe al hacer click en el path.
+    # 'notepad.exe' = Notepad (siempre disponible; recomendado)
+    # ''            = aplicacion asociada de Windows (ojo: .log no siempre tiene)
+    # 'code.cmd'    = VS Code, si esta en el PATH
+    AbrirDetalleCon = 'notepad.exe'
+
     Umbrales = @{
         # Dias de antiguedad maxima de las firmas de Defender antes de avisar
         DiasFirmaDefender = 4

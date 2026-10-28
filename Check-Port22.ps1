@@ -6,6 +6,7 @@
 # Uso:
 #   .\Check-Port22.ps1                  # corrida normal
 #   .\Check-Port22.ps1 -SinPopup        # prueba: no muestra popup
+#   .\Check-Port22.ps1 -AbrirUltimo     # abre el ultimo informe de logs\ y sale
 #   .\Check-Port22.ps1 -AprobarBaselines # acepta TODAS las novedades como conocidas
 #   .\Check-Port22.ps1 -AprobarTareas    # solo tareas programadas
 # ==========================================
@@ -13,12 +14,14 @@
 param(
     [switch]$AprobarTareas,
     [switch]$AprobarBaselines,
-    [switch]$SinPopup
+    [switch]$SinPopup,
+    [switch]$AbrirUltimo
 )
 
 $eventoLog      = "Seguridad-Port22"
 $logType        = "Application"
 $script:baseDir = Join-Path $PSScriptRoot "baseline"
+$script:logsDir = Join-Path $PSScriptRoot "logs"
 $refTareasTxt   = Join-Path $PSScriptRoot "tareas_baseline.txt"
 
 $script:AprobarTodo   = [bool]$AprobarBaselines
@@ -29,6 +32,13 @@ $script:AprobarTareas = ([bool]$AprobarTareas -or [bool]$AprobarBaselines)
 # ---------------------------------------------------------
 $config = @{
     PopupSoloCritico = $true
+    # Cuantos informes .log se conservan en logs\ (0 = sin limite)
+    RetencionInformes = 60
+    # Programa con el que se abre el informe desde el popup.
+    # 'notepad.exe' = Notepad (siempre disponible, recomendado)
+    # ''            = aplicacion asociada de Windows (puede no existir para .log)
+    # 'code.cmd'    = VS Code, si esta en el PATH
+    AbrirDetalleCon = 'notepad.exe'
     Umbrales = @{
         DiasFirmaDefender = 4
     }
@@ -185,6 +195,268 @@ function Write-LogSeguridad {
             -EntryType $Tipo -Message $Mensaje -ErrorAction Stop
     } catch {
         Write-Warning "No se pudo escribir en el Event Log: $($_.Exception.Message)"
+    }
+}
+
+# ---------------------------------------------------------
+# Informe de ejecucion en archivo (para no abrir el Visor de Eventos)
+# ---------------------------------------------------------
+function Write-InformeEjecucion {
+    param(
+        [string]$Mensaje = '',
+        [int]$EventId = 1000,
+        [string]$TipoEvento = 'Information',
+        [string]$Resumen = '',
+        $Hallazgos = @(),
+        [string]$Directorio = $script:logsDir
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Directorio)) {
+        $Directorio = Join-Path $PSScriptRoot 'logs'
+    }
+
+    try {
+        if (-not (Test-Path $Directorio)) {
+            New-Item -ItemType Directory -Path $Directorio -Force | Out-Null
+        }
+
+        $ahora = Get-Date
+        $marca = $ahora.ToString('yyyyMMdd-HHmmss')
+        $ruta = Join-Path $Directorio "radar-$marca.log"
+        $n = 1
+        while (Test-Path $ruta) {
+            $ruta = Join-Path $Directorio "radar-$marca-$n.log"
+            $n++
+        }
+
+        $sep = '=' * 66
+        $lineas = @()
+        $lineas += $sep
+        $lineas += ' RADAR DE SEGURIDAD - INFORME DE EJECUCION'
+        $lineas += $sep
+        $lineas += "Fecha     : $($ahora.ToString('dd/MM/yyyy HH:mm:ss'))"
+        $lineas += "Equipo    : $env:COMPUTERNAME"
+        $lineas += "Usuario   : $env:USERNAME"
+        $elevado = 'No'
+        if ($script:EsAdmin) { $elevado = 'Si' }
+        $lineas += "Elevado   : $elevado"
+        $lineas += "Evento    : $logType / $eventoLog / ID $EventId ($TipoEvento)"
+        if ($Resumen) { $lineas += "Resultado : $Resumen" }
+        $lineas += ''
+
+        $grupos = @(
+            @{ Nombre = 'CRITICOS';    Severidad = 'Critico' },
+            @{ Nombre = 'AVISOS';      Severidad = 'Aviso' },
+            @{ Nombre = 'INFORMATIVOS'; Severidad = 'Info' }
+        )
+        foreach ($g in $grupos) {
+            $items = @($Hallazgos | Where-Object { $_.Severidad -eq $g.Severidad })
+            if ($items.Count -eq 0) { continue }
+            $lineas += "$($g.Nombre) ($($items.Count))"
+            foreach ($h in $items) { $lineas += "  - $($h.Area): $($h.Detalle)" }
+            $lineas += ''
+        }
+
+        if (-not ($Hallazgos | Where-Object { $_.Severidad -ne 'Info' })) {
+            $lineas += 'Sin hallazgos: el equipo mantiene la configuracion esperada.'
+            $lineas += ''
+        }
+
+        $lineas += $sep
+        $lineas += 'Mensaje registrado en el Event Log:'
+        $lineas += $sep
+        foreach ($l in ($Mensaje -split "`r?`n")) { $lineas += $l }
+        $lineas += ''
+        $lineas += $sep
+        $lineas += 'Para aceptar las novedades como conocidas:'
+        $lineas += '  .\Check-Port22.ps1 -AprobarBaselines'
+        $lineas += '  .\Check-Port22.ps1 -AprobarTareas     (solo tareas programadas)'
+        $lineas += $sep
+
+        [System.IO.File]::WriteAllLines($ruta, [string[]]$lineas, (New-Object System.Text.UTF8Encoding($false)))
+
+        # Retencion: conserva los N informes mas recientes.
+        $retencion = 60
+        if ($script:Config -and $script:Config.ContainsKey('RetencionInformes')) {
+            $retencion = [int]$script:Config.RetencionInformes
+        }
+        if ($retencion -gt 0) {
+            $viejos = @(Get-ChildItem -Path $Directorio -Filter 'radar-*.log' -File -ErrorAction SilentlyContinue |
+                Sort-Object LastWriteTime -Descending |
+                Select-Object -Skip $retencion)
+            foreach ($v in $viejos) { Remove-Item -Path $v.FullName -Force -ErrorAction SilentlyContinue }
+        }
+
+        return $ruta
+    } catch {
+        Write-Warning "No se pudo escribir el informe de ejecucion: $($_.Exception.Message)"
+        return $null
+    }
+}
+
+# Abre el informe con la aplicacion asociada. Se usa explorer.exe a proposito:
+# hereda la sesion del usuario y NO la elevacion, asi el visor no corre como admin.
+function Open-InformeRadar {
+    param([string]$Ruta)
+
+    if ([string]::IsNullOrWhiteSpace($Ruta) -or -not (Test-Path $Ruta)) {
+        Write-Warning "El informe no existe: $Ruta"
+        return
+    }
+
+    $exe = ''
+    if ($script:Config -and $script:Config.ContainsKey('AbrirDetalleCon')) {
+        $exe = [string]$script:Config.AbrirDetalleCon
+    }
+
+    try {
+        if ([string]::IsNullOrWhiteSpace($exe)) {
+            Start-Process -FilePath 'explorer.exe' -ArgumentList "`"$Ruta`""
+        } else {
+            Start-Process -FilePath $exe -ArgumentList "`"$Ruta`""
+        }
+    } catch {
+        try {
+            Start-Process -FilePath 'notepad.exe' -ArgumentList "`"$Ruta`""
+        } catch {
+            Write-Warning "No se pudo abrir el informe: $($_.Exception.Message)"
+        }
+    }
+}
+
+# ---------------------------------------------------------
+# Popup con el detalle y un link al informe completo
+# ---------------------------------------------------------
+function Show-PopupRadar {
+    param(
+        [string]$Titulo = 'RADAR DE SEGURIDAD',
+        [string]$Texto = '',
+        [string]$RutaInforme = ''
+    )
+
+    try {
+        Add-Type -AssemblyName System.Windows.Forms -ErrorAction Stop
+        Add-Type -AssemblyName System.Drawing -ErrorAction Stop
+    } catch {
+        Write-Warning "No se pudo cargar WinForms: $($_.Exception.Message)"
+        return
+    }
+
+    $hayInforme = (-not [string]::IsNullOrWhiteSpace($RutaInforme)) -and (Test-Path $RutaInforme)
+
+    # Coordenadas precalculadas: dentro de un New-Object(...) no se puede
+    # usar aritmetica sin parentesis (PowerShell la parsea como argumento suelto).
+    $anchoForm = 700
+    $altoForm = 490
+    $xLink = 86
+    $anchoLink = 372
+    $yLink = 434
+    $yBotones = 429
+    $xBotones = 470
+
+    try {
+        $form = New-Object System.Windows.Forms.Form
+        $form.Text = $Titulo
+        $form.StartPosition = 'CenterScreen'
+        $form.FormBorderStyle = 'FixedDialog'
+        $form.MaximizeBox = $false
+        $form.MinimizeBox = $false
+        $form.ShowInTaskbar = $true
+        $form.TopMost = $true
+        $form.ClientSize = New-Object System.Drawing.Size($anchoForm, $altoForm)
+        $form.Font = New-Object System.Drawing.Font('Segoe UI', 9)
+
+        $lblTitulo = New-Object System.Windows.Forms.Label
+        $lblTitulo.Text = $Titulo
+        $lblTitulo.Font = New-Object System.Drawing.Font('Segoe UI', 11, [System.Drawing.FontStyle]::Bold)
+        $lblTitulo.ForeColor = [System.Drawing.Color]::FromArgb(160, 20, 20)
+        $lblTitulo.AutoSize = $true
+        $lblTitulo.Location = New-Object System.Drawing.Point(16, 12)
+        $form.Controls.Add($lblTitulo)
+
+        $txt = New-Object System.Windows.Forms.TextBox
+        $txt.Multiline = $true
+        $txt.ReadOnly = $true
+        $txt.ScrollBars = 'Both'
+        $txt.WordWrap = $false
+        $txt.BackColor = [System.Drawing.Color]::White
+        $txt.Font = New-Object System.Drawing.Font('Consolas', 9)
+        $txt.Location = New-Object System.Drawing.Point(16, 42)
+        $txt.Size = New-Object System.Drawing.Size(668, 380)
+        $txt.Text = ($Texto -replace "`r?`n", "`r`n")
+        $form.Controls.Add($txt)
+
+        if ($hayInforme) {
+            $script:RutaInformePopup = $RutaInforme
+
+            # Etiqueta corta a la izquierda y el PATH como link clickeable.
+            $lblInforme = New-Object System.Windows.Forms.Label
+            $lblInforme.Text = 'Informe:'
+            $lblInforme.AutoSize = $true
+            $lblInforme.ForeColor = [System.Drawing.Color]::DimGray
+            $lblInforme.Location = New-Object System.Drawing.Point(16, $yLink)
+            $form.Controls.Add($lblInforme)
+
+            $lnk = New-Object System.Windows.Forms.LinkLabel
+            $lnk.Text = $RutaInforme
+            $lnk.Location = New-Object System.Drawing.Point($xLink, $yLink)
+            $lnk.Size = New-Object System.Drawing.Size($anchoLink, 18)
+            $lnk.AutoEllipsis = $true
+            $lnk.LinkColor = [System.Drawing.Color]::FromArgb(0, 90, 200)
+            $lnk.ActiveLinkColor = [System.Drawing.Color]::FromArgb(200, 60, 0)
+            $lnk.Add_LinkClicked({ Open-InformeRadar -Ruta $script:RutaInformePopup })
+
+            $tip = New-Object System.Windows.Forms.ToolTip
+            $tip.SetToolTip($lnk, "Click para abrir:`n$RutaInforme")
+            $form.Controls.Add($lnk)
+        } else {
+            $lblSin = New-Object System.Windows.Forms.Label
+            $lblSin.Text = 'Sin informe en archivo para esta corrida.'
+            $lblSin.AutoSize = $true
+            $lblSin.ForeColor = [System.Drawing.Color]::DimGray
+            $lblSin.Location = New-Object System.Drawing.Point(16, $yLink)
+            $form.Controls.Add($lblSin)
+        }
+
+        $btnCopiar = New-Object System.Windows.Forms.Button
+        $btnCopiar.Text = 'Copiar'
+        $btnCopiar.Size = New-Object System.Drawing.Size(90, 30)
+        $btnCopiar.Location = New-Object System.Drawing.Point($xBotones, $yBotones)
+        $btnCopiar.Add_Click({
+            try {
+                [System.Windows.Forms.Clipboard]::SetText($txt.Text)
+            } catch {
+                Write-Warning "No se pudo copiar al portapapeles: $($_.Exception.Message)"
+            }
+        })
+        $form.Controls.Add($btnCopiar)
+
+        $xCopiar = $xBotones
+        $xCerrar = $xCopiar + 100
+        $btnCerrar = New-Object System.Windows.Forms.Button
+        $btnCerrar.Text = 'Cerrar'
+        $btnCerrar.Size = New-Object System.Drawing.Size(90, 30)
+        $btnCerrar.Location = New-Object System.Drawing.Point($xCerrar, $yBotones)
+        $btnCerrar.DialogResult = [System.Windows.Forms.DialogResult]::OK
+        $form.AcceptButton = $btnCerrar
+        $form.CancelButton = $btnCerrar
+        $form.Controls.Add($btnCerrar)
+
+        $form.Add_Shown({ $form.Activate() })
+        [void]$form.ShowDialog()
+        $form.Dispose()
+    } catch {
+        # Si WinForms falla, siempre queda el aviso clasico.
+        Write-Warning "No se pudo mostrar la ventana con link: $($_.Exception.Message)"
+        try {
+            [System.Windows.Forms.MessageBox]::Show(
+                $Texto + "`n`nInforme: $RutaInforme",
+                $Titulo,
+                [System.Windows.Forms.MessageBoxButtons]::OK,
+                [System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
+        } catch {
+            Write-Output "$Titulo`n$Texto"
+        }
     }
 }
 
@@ -518,6 +790,20 @@ function Test-Identidad {
 # ---------------------------------------------------------
 # Ejecucion
 # ---------------------------------------------------------
+# Atajo: abrir el ultimo informe guardado y salir sin correr chequeos.
+if ($AbrirUltimo) {
+    $ultimo = Get-ChildItem -Path $script:logsDir -Filter 'radar-*.log' -File -ErrorAction SilentlyContinue |
+        Sort-Object LastWriteTime -Descending |
+        Select-Object -First 1
+    if (-not $ultimo) {
+        Write-Output "No hay informes en $script:logsDir. Corre el radar al menos una vez."
+        return
+    }
+    Write-Output "Ultimo informe: $($ultimo.FullName)"
+    Open-InformeRadar -Ruta $ultimo.FullName
+    return
+}
+
 Initialize-BaseDir
 
 if (-not $script:EsAdmin) {
@@ -566,13 +852,24 @@ if ($avisos.Count -gt 0) {
 if ($partes.Count -eq 0) { $partes = @('Radar OK: sin hallazgos.') }
 $mensajeEvento = $partes -join "`n"
 
+$eventId = 1000
+$tipoEvento = 'Information'
 if ($criticos.Count -gt 0) {
-    Write-LogSeguridad -Mensaje $mensajeEvento -Tipo Error -Id 1001
+    $eventId = 1001
+    $tipoEvento = 'Error'
 } elseif ($avisos.Count -gt 0) {
-    Write-LogSeguridad -Mensaje $mensajeEvento -Tipo Warning -Id 1002
-} else {
-    Write-LogSeguridad -Mensaje $mensajeEvento -Tipo Information -Id 1000
+    $eventId = 1002
+    $tipoEvento = 'Warning'
 }
+
+# --- Informe en archivo (el popup lo abre con un click) ---
+$resumen = "$($criticos.Count) criticos, $($avisos.Count) avisos, $($infos.Count) informativos"
+$rutaInforme = Write-InformeEjecucion -Mensaje $mensajeEvento -EventId $eventId `
+    -TipoEvento $tipoEvento -Resumen $resumen -Hallazgos $hallazgos
+
+$mensajeConRuta = $mensajeEvento
+if ($rutaInforme) { $mensajeConRuta += "`n`nInforme completo: $rutaInforme" }
+Write-LogSeguridad -Mensaje $mensajeConRuta -Tipo $tipoEvento -Id $eventId
 
 # --- Popup ---
 $mostrarPopup = $false
@@ -586,30 +883,31 @@ if ($SinPopup) { $mostrarPopup = $false }
 if ($mostrarPopup) {
     $lineasPopup = @()
     if ($criticos.Count -gt 0) {
-        $lineasPopup += "CRITICOS:"
+        $lineasPopup += "CRITICOS ($($criticos.Count)):"
         $criticos | ForEach-Object { $lineasPopup += " - $($_.Area): $($_.Detalle)" }
+        $lineasPopup += ''
     }
     if ($avisos.Count -gt 0) {
-        $lineasPopup += ""
-        $lineasPopup += "Avisos: $($avisos.Count) (ver Visor de Eventos, ID 1002)"
-    }
-    if ($lineasPopup.Count -gt 18) {
-        $resto = $lineasPopup.Count - 17
-        $lineasPopup = @($lineasPopup[0..16]) + "... y $resto mas (ver Visor de Eventos)"
+        $lineasPopup += "AVISOS ($($avisos.Count)):"
+        $avisos | ForEach-Object { $lineasPopup += " - $($_.Area): $($_.Detalle)" }
+        $lineasPopup += ''
     }
 
-    $texto = ($lineasPopup -join "`n") + "`n`nRevisar y actuar."
-    Add-Type -AssemblyName System.Windows.Forms
-    [System.Windows.Forms.MessageBox]::Show(
-        $texto,
-        "RADAR DE SEGURIDAD",
-        [System.Windows.Forms.MessageBoxButtons]::OK,
-        [System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
+    # Techo defensivo: el detalle completo queda en el archivo.
+    if ($lineasPopup.Count -gt 300) {
+        $resto = $lineasPopup.Count - 299
+        $lineasPopup = @($lineasPopup[0..298]) + "... y $resto lineas mas (ver informe completo)"
+    }
+
+    $textoPopup = ($lineasPopup -join "`n") + "`nRevisar y actuar."
+    Show-PopupRadar -Titulo 'RADAR DE SEGURIDAD' -Texto $textoPopup -RutaInforme $rutaInforme
 }
 
 # --- Consola ---
 if ($criticos.Count -eq 0 -and $avisos.Count -eq 0) {
     Write-Output "RADAR OK: sin amenazas detectadas ($($infos.Count) informativos)."
 } else {
-    Write-Output "RADAR: $($criticos.Count) criticos, $($avisos.Count) avisos. Evento ID $(if ($criticos.Count) { 1001 } else { 1002 })."
+    Write-Output "RADAR: $($criticos.Count) criticos, $($avisos.Count) avisos. Evento ID $eventId."
 }
+if ($rutaInforme) { Write-Output "Informe: $rutaInforme" }
+
