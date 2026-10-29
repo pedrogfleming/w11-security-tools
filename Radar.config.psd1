@@ -8,9 +8,14 @@
     # $false = los AVISOS tambien abren popup
     PopupSoloCritico = $true
 
-    # Cuantos informes se conservan en logs\ (cada corrida deja un .log con el
-    # detalle completo). 0 = sin limite.
+    # Cuantos informes se conservan en logs\ SIN comprimir. Los mas viejos NO se
+    # borran: se archivan en logs\archivo\radar-<AAAA-MM>.zip (guardado eterno).
+    # 0 = no archivar nunca (deja todos los .log sueltos).
     RetencionInformes = 60
+
+    # $true  = los informes viejos se comprimen y se guardan para siempre
+    # $false = los informes viejos se borran (comportamiento anterior)
+    ArchivarInformes = $true
 
     # Programa con el que el popup abre el informe al hacer click en el path.
     # 'notepad.exe' = Notepad (siempre disponible; recomendado)

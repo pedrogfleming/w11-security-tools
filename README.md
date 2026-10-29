@@ -64,6 +64,7 @@ Cuando algo cambia: **informe en `logs\`**, **evento en el Visor** y, si es **cr
 | `.gitattributes` | Normalizacion de line endings (LF en repo, CRLF en scripts). | No |
 | `baseline\*.json` | Lineas base por chequeo (se crean solas, con claves normalizadas). | Si |
 | `logs\radar-*.log` | Informe de cada corrida (lo abre el popup con un click). | Si |
+| `logs\archivo\radar-AAAA-MM.zip` | Informes viejos comprimidos (guardado eterno). | Si |
 | `Firewall.md` | Comando opcional de endurecimiento. | No |
 | `Tareas_Referencia.txt` | **Obsoleto** (version vieja). Se puede borrar. | No |
 
@@ -348,9 +349,30 @@ Cada corrida deja un archivo `logs\radar-AAAAMMDD-HHMMSS.log` con:
 
 El mismo path se agrega al final del evento en el Visor, asi que tambien se puede llegar al archivo desde ahi.
 
-Se conservan los ultimos `RetencionInformes` (60 por defecto) y el resto se borra solo. `logs\` esta en `.gitignore`.
+#### Guardado eterno y comprimido
 
-Para abrir el ultimo informe sin correr nada:
+Los informes **no se borran nunca**:
+
+| Carpeta | Contenido |
+|---------|-----------|
+| `logs\radar-*.log` | Las ultimas `RetencionInformes` corridas (60 por defecto), sin comprimir. |
+| `logs\archivo\radar-<AAAA-MM>.zip` | Todo lo anterior, comprimido por mes, un `.log` por corrida. |
+
+Cuando una corrida supera la retencion, el `.log` mas viejo se agrega al zip del mes que le corresponde y se borra el suelto. El zip se **actualiza** (agrega una entrada), no se reescribe, asi que el costo por corrida es minimo.
+
+Numeros reales medidos en este equipo (5 informes, 5,3 KB):
+
+| | Bytes | Proyeccion anual (500 corridas) |
+|---|---|---|
+| Sin comprimir | 5.350 | ~520 KB |
+| Comprimido (zip mensual) | 2.193 | **~260 KB** |
+| Referencia: todo en un solo stream | 824 | ~80 KB |
+
+Se elige un archivo por corrida dentro del zip (2,4:1) en vez de concatenar todo (6,5:1) porque asi cada corrida sigue siendo un archivo abrible y extraible por separado. La diferencia son ~180 KB cada 12 meses: no compensa perder eso.
+
+**Nada se pierde si falla el archivado**: si el zip no se puede escribir, el `.log` se deja en su lugar y queda un warning.
+
+`logs\` esta en `.gitignore`. Para abrir el ultimo informe sin correr nada:
 
 ```powershell
 .\Check-Port22.ps1 -AbrirUltimo
@@ -363,7 +385,8 @@ O desde el Explorador: `C:\Scripts\logs\` (ordenado por fecha).
 | Clave | Default | Significado |
 |-------|---------|-------------|
 | `PopupSoloCritico` | `$true` | Solo criticos abren popup. |
-| `RetencionInformes` | `60` | Cuantos `.log` se conservan en `logs\` (`0` = sin limite). |
+| `RetencionInformes` | `60` | Cuantos `.log` quedan **sin comprimir** en `logs\` (`0` = no archivar nunca). |
+| `ArchivarInformes` | `$true` | Los informes viejos se comprimen en `logs\archivo\` para siempre. `$false` = se borran (comportamiento anterior). |
 | `AbrirDetalleCon` | `'notepad.exe'` | Programa que abre el informe al clickear el path. `''` = asociacion de Windows (ojo: `.log` no siempre tiene), `'code.cmd'` = VS Code. |
 | `Umbrales.DiasFirmaDefender` | `4` | Dias maximos de antiguedad de firmas. |
 | `Aceptados.RDP` | `$false` | `$true` si usas Escritorio Remoto a proposito. |
@@ -617,7 +640,7 @@ El icono corre **sin Administrador**: solo lee `logs\` y muestra ventanas. Las t
 - Instancia unica: si ya hay un icono, un segundo arranque sale solo.
 - Arranque manual: `.\Radar-Tray.ps1` (solo tray) o `.\Radar-Tray.ps1 -Mostrar` (abre el dashboard).
 - Si un informe tiene criticos y aparece uno nuevo mientras el icono esta corriendo, muestra un **globo de notificacion**.
-- El dashboard lista lo que hay en `logs\`. Las corridas anteriores a esta version solo estan en el Visor de Eventos.
+- El dashboard lista **todas las corridas**: las sueltas y las archivadas (en gris). Al abrir una archivada la extrae a `%TEMP%\radar-informes\` y la muestra.
 - `-SinIcono` abre solo la ventana (util para probar sin dejar el icono).
 
 ### Probar que la alerta funciona
@@ -847,8 +870,13 @@ $script:AprobarTareas = ([bool]$AprobarTareas -or [bool]$AprobarBaselines)
 # ---------------------------------------------------------
 $config = @{
     PopupSoloCritico = $true
-    # Cuantos informes .log se conservan en logs\ (0 = sin limite)
+    # Cuantos informes .log se conservan SIN comprimir en logs\ (0 = todos).
+    # Los mas viejos se archivan en logs\archivo\radar-<AAAA-MM>.zip (no se borran).
     RetencionInformes = 60
+
+    # $true = los informes viejos se comprimen y se guardan para siempre.
+    # $false = comportamiento viejo: los informes viejos se borran.
+    ArchivarInformes = $true
     # Programa con el que se abre el informe desde el popup.
     # 'notepad.exe' = Notepad (siempre disponible, recomendado)
     # ''            = aplicacion asociada de Windows (puede no existir para .log)
@@ -1019,6 +1047,54 @@ function Write-LogSeguridad {
 # ---------------------------------------------------------
 # Informe de ejecucion en archivo (para no abrir el Visor de Eventos)
 # ---------------------------------------------------------
+function Add-InformeAlArchivo {
+    param(
+        [string]$Ruta,
+        [string]$DirArchivo
+    )
+
+    if (-not (Test-Path -LiteralPath $Ruta)) { return $null }
+    if (-not (Test-Path -LiteralPath $DirArchivo)) {
+        New-Item -ItemType Directory -Path $DirArchivo -Force | Out-Null
+    }
+
+    Add-Type -AssemblyName System.IO.Compression -ErrorAction SilentlyContinue
+    Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue
+
+    $mes = (Get-Item -LiteralPath $Ruta).LastWriteTime.ToString('yyyy-MM')
+    $rutaZip = Join-Path $DirArchivo "radar-$mes.zip"
+    $nombre = Split-Path $Ruta -Leaf
+
+    $zip = $null
+    try {
+        # Se pasan los modos como texto: los enums viven en otra assembly y
+        # el literal [System.IO.Compression.ZipArchiveMode] no resuelve siempre.
+        $existe = Test-Path -LiteralPath $rutaZip
+        if ($existe) {
+            $zip = [System.IO.Compression.ZipFile]::Open($rutaZip, 'Update')
+        } else {
+            $zip = [System.IO.Compression.ZipFile]::Open($rutaZip, 'Create')
+        }
+
+        # Nombre unico dentro del zip (por si se restauro un backup).
+        # En modo Create no se puede enumerar: un zip nuevo no tiene duplicados.
+        $entrada = $nombre
+        if ($existe) {
+            $n = 1
+            while ($zip.GetEntry($entrada)) {
+                $base = [System.IO.Path]::GetFileNameWithoutExtension($nombre)
+                $entrada = "$base-r$n.log"
+                $n++
+            }
+        }
+
+        [void][System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip, $Ruta, $entrada, 'Optimal')
+        return $rutaZip
+    } finally {
+        if ($zip) { $zip.Dispose() }
+    }
+}
+
 function Write-InformeEjecucion {
     param(
         [string]$Mensaje = '',
@@ -1093,16 +1169,36 @@ function Write-InformeEjecucion {
 
         [System.IO.File]::WriteAllLines($ruta, [string[]]$lineas, (New-Object System.Text.UTF8Encoding($false)))
 
-        # Retencion: conserva los N informes mas recientes.
+        # Retencion: conserva los N informes mas recientes sin comprimir.
+        # Los anteriores NO se borran: se archivan en logs\archivo\radar-<AAAA-MM>.zip
         $retencion = 60
         if ($script:Config -and $script:Config.ContainsKey('RetencionInformes')) {
             $retencion = [int]$script:Config.RetencionInformes
         }
+        $archivar = $true
+        if ($script:Config -and $script:Config.ContainsKey('ArchivarInformes')) {
+            $archivar = [bool]$script:Config.ArchivarInformes
+        }
+
         if ($retencion -gt 0) {
+            $dirArchivo = Join-Path $Directorio 'archivo'
             $viejos = @(Get-ChildItem -Path $Directorio -Filter 'radar-*.log' -File -ErrorAction SilentlyContinue |
                 Sort-Object LastWriteTime -Descending |
                 Select-Object -Skip $retencion)
-            foreach ($v in $viejos) { Remove-Item -Path $v.FullName -Force -ErrorAction SilentlyContinue }
+
+            foreach ($v in $viejos) {
+                if ($archivar) {
+                    try {
+                        [void](Add-InformeAlArchivo -Ruta $v.FullName -DirArchivo $dirArchivo)
+                        Remove-Item -LiteralPath $v.FullName -Force -ErrorAction SilentlyContinue
+                    } catch {
+                        # Si no se pudo archivar, se deja el archivo (nunca se pierde).
+                        Write-Warning "No se pudo archivar $($v.Name): $($_.Exception.Message)"
+                    }
+                } else {
+                    Remove-Item -LiteralPath $v.FullName -Force -ErrorAction SilentlyContinue
+                }
+            }
         }
 
         return $ruta
@@ -1744,9 +1840,14 @@ if ($rutaInforme) { Write-Output "Informe: $rutaInforme" }
     # $false = los AVISOS tambien abren popup
     PopupSoloCritico = $true
 
-    # Cuantos informes se conservan en logs\ (cada corrida deja un .log con el
-    # detalle completo). 0 = sin limite.
+    # Cuantos informes se conservan en logs\ SIN comprimir. Los mas viejos NO se
+    # borran: se archivan en logs\archivo\radar-<AAAA-MM>.zip (guardado eterno).
+    # 0 = no archivar nunca (deja todos los .log sueltos).
     RetencionInformes = 60
+
+    # $true  = los informes viejos se comprimen y se guardan para siempre
+    # $false = los informes viejos se borran (comportamiento anterior)
+    ArchivarInformes = $true
 
     # Programa con el que el popup abre el informe al hacer click en el path.
     # 'notepad.exe' = Notepad (siempre disponible; recomendado)

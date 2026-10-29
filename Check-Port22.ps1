@@ -32,8 +32,13 @@ $script:AprobarTareas = ([bool]$AprobarTareas -or [bool]$AprobarBaselines)
 # ---------------------------------------------------------
 $config = @{
     PopupSoloCritico = $true
-    # Cuantos informes .log se conservan en logs\ (0 = sin limite)
+    # Cuantos informes .log se conservan SIN comprimir en logs\ (0 = todos).
+    # Los mas viejos se archivan en logs\archivo\radar-<AAAA-MM>.zip (no se borran).
     RetencionInformes = 60
+
+    # $true = los informes viejos se comprimen y se guardan para siempre.
+    # $false = comportamiento viejo: los informes viejos se borran.
+    ArchivarInformes = $true
     # Programa con el que se abre el informe desde el popup.
     # 'notepad.exe' = Notepad (siempre disponible, recomendado)
     # ''            = aplicacion asociada de Windows (puede no existir para .log)
@@ -204,6 +209,54 @@ function Write-LogSeguridad {
 # ---------------------------------------------------------
 # Informe de ejecucion en archivo (para no abrir el Visor de Eventos)
 # ---------------------------------------------------------
+function Add-InformeAlArchivo {
+    param(
+        [string]$Ruta,
+        [string]$DirArchivo
+    )
+
+    if (-not (Test-Path -LiteralPath $Ruta)) { return $null }
+    if (-not (Test-Path -LiteralPath $DirArchivo)) {
+        New-Item -ItemType Directory -Path $DirArchivo -Force | Out-Null
+    }
+
+    Add-Type -AssemblyName System.IO.Compression -ErrorAction SilentlyContinue
+    Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue
+
+    $mes = (Get-Item -LiteralPath $Ruta).LastWriteTime.ToString('yyyy-MM')
+    $rutaZip = Join-Path $DirArchivo "radar-$mes.zip"
+    $nombre = Split-Path $Ruta -Leaf
+
+    $zip = $null
+    try {
+        # Se pasan los modos como texto: los enums viven en otra assembly y
+        # el literal [System.IO.Compression.ZipArchiveMode] no resuelve siempre.
+        $existe = Test-Path -LiteralPath $rutaZip
+        if ($existe) {
+            $zip = [System.IO.Compression.ZipFile]::Open($rutaZip, 'Update')
+        } else {
+            $zip = [System.IO.Compression.ZipFile]::Open($rutaZip, 'Create')
+        }
+
+        # Nombre unico dentro del zip (por si se restauro un backup).
+        # En modo Create no se puede enumerar: un zip nuevo no tiene duplicados.
+        $entrada = $nombre
+        if ($existe) {
+            $n = 1
+            while ($zip.GetEntry($entrada)) {
+                $base = [System.IO.Path]::GetFileNameWithoutExtension($nombre)
+                $entrada = "$base-r$n.log"
+                $n++
+            }
+        }
+
+        [void][System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip, $Ruta, $entrada, 'Optimal')
+        return $rutaZip
+    } finally {
+        if ($zip) { $zip.Dispose() }
+    }
+}
+
 function Write-InformeEjecucion {
     param(
         [string]$Mensaje = '',
@@ -278,16 +331,36 @@ function Write-InformeEjecucion {
 
         [System.IO.File]::WriteAllLines($ruta, [string[]]$lineas, (New-Object System.Text.UTF8Encoding($false)))
 
-        # Retencion: conserva los N informes mas recientes.
+        # Retencion: conserva los N informes mas recientes sin comprimir.
+        # Los anteriores NO se borran: se archivan en logs\archivo\radar-<AAAA-MM>.zip
         $retencion = 60
         if ($script:Config -and $script:Config.ContainsKey('RetencionInformes')) {
             $retencion = [int]$script:Config.RetencionInformes
         }
+        $archivar = $true
+        if ($script:Config -and $script:Config.ContainsKey('ArchivarInformes')) {
+            $archivar = [bool]$script:Config.ArchivarInformes
+        }
+
         if ($retencion -gt 0) {
+            $dirArchivo = Join-Path $Directorio 'archivo'
             $viejos = @(Get-ChildItem -Path $Directorio -Filter 'radar-*.log' -File -ErrorAction SilentlyContinue |
                 Sort-Object LastWriteTime -Descending |
                 Select-Object -Skip $retencion)
-            foreach ($v in $viejos) { Remove-Item -Path $v.FullName -Force -ErrorAction SilentlyContinue }
+
+            foreach ($v in $viejos) {
+                if ($archivar) {
+                    try {
+                        [void](Add-InformeAlArchivo -Ruta $v.FullName -DirArchivo $dirArchivo)
+                        Remove-Item -LiteralPath $v.FullName -Force -ErrorAction SilentlyContinue
+                    } catch {
+                        # Si no se pudo archivar, se deja el archivo (nunca se pierde).
+                        Write-Warning "No se pudo archivar $($v.Name): $($_.Exception.Message)"
+                    }
+                } else {
+                    Remove-Item -LiteralPath $v.FullName -Force -ErrorAction SilentlyContinue
+                }
+            }
         }
 
         return $ruta

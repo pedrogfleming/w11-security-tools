@@ -35,7 +35,7 @@ BeforeAll {
     $script:logType = 'Application'
     $script:eventoLog = 'Seguridad-Port22'
     $script:EsAdmin = $true
-    $script:Config = @{ RetencionInformes = 60; AbrirDetalleCon = '' }
+    $script:Config = @{ RetencionInformes = 60; ArchivarInformes = $false; AbrirDetalleCon = '' }
 }
 
 Describe 'Lineas base del radar' {
@@ -236,7 +236,7 @@ Describe 'Informe de ejecucion' {
 
     BeforeEach {
         $script:dirInformes = Join-Path ([System.IO.Path]::GetTempPath()) ("radar-informes-" + [guid]::NewGuid().ToString('N'))
-        $script:Config = @{ RetencionInformes = 60; AbrirDetalleCon = '' }
+        $script:Config = @{ RetencionInformes = 60; ArchivarInformes = $false; AbrirDetalleCon = '' }
     }
 
     AfterEach {
@@ -310,6 +310,49 @@ Describe 'Informe de ejecucion' {
         Write-InformeEjecucion -Mensaje 'nuevo' -Directorio $script:dirInformes | Out-Null
 
         @(Get-ChildItem -Path $script:dirInformes -Filter 'radar-*.log').Count | Should -Be 2
+    }
+
+    It 'archiva los informes viejos en vez de borrarlos' {
+        New-Item -ItemType Directory -Path $script:dirInformes -Force | Out-Null
+        1..5 | ForEach-Object {
+            $f = Join-Path $script:dirInformes ("radar-2026010{0}-000000.log" -f $_)
+            Set-Content -Path $f -Value "informe viejo $_" -Encoding ASCII
+            (Get-Item $f).LastWriteTime = Get-Date ("2026-01-0{0} 08:00:00" -f $_)
+        }
+        $script:Config.RetencionInformes = 2
+        $script:Config.ArchivarInformes = $true
+
+        Write-InformeEjecucion -Mensaje 'nuevo' -Directorio $script:dirInformes | Out-Null
+
+        $zip = Join-Path $script:dirInformes 'archivo\radar-2026-01.zip'
+        $zip | Should -Exist
+
+        @(Get-ChildItem -Path $script:dirInformes -Filter 'radar-*.log').Count | Should -Be 2
+
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        $z = [System.IO.Compression.ZipFile]::OpenRead($zip)
+        try {
+            $entradas = @($z.Entries | Where-Object { $_.Name -like 'radar-*.log' })
+        } finally {
+            $z.Dispose()
+        }
+        $entradas.Count | Should -Be 4
+    }
+
+    It 'no archiva si ArchivarInformes es falso' {
+        New-Item -ItemType Directory -Path $script:dirInformes -Force | Out-Null
+        1..3 | ForEach-Object {
+            $f = Join-Path $script:dirInformes ("radar-2026010{0}-000000.log" -f $_)
+            Set-Content -Path $f -Value 'viejo' -Encoding ASCII
+            (Get-Item $f).LastWriteTime = Get-Date ("2026-01-0{0} 08:00:00" -f $_)
+        }
+        $script:Config.RetencionInformes = 1
+        $script:Config.ArchivarInformes = $false
+
+        Write-InformeEjecucion -Mensaje 'nuevo' -Directorio $script:dirInformes | Out-Null
+
+        (Join-Path $script:dirInformes 'archivo') | Should -Not -Exist
+        @(Get-ChildItem -Path $script:dirInformes -Filter 'radar-*.log').Count | Should -Be 1
     }
 
     It 'no falla si el directorio no existe' {

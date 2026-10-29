@@ -48,10 +48,12 @@ $script:UiForm = $null
 $script:UiGrid = $null
 $script:UiEstado = $null
 $script:UiBotonAlternar = $null
+$script:UiPie = $null
 $script:UiItemAlternar = $null
 $script:RefrescarDashboard = $null
 $script:TimerDashboard = $null
 $script:UltimoVisto = ''
+$script:CacheArchivo = $null
 
 # ---------------------------------------------------------
 # Datos
@@ -71,6 +73,52 @@ function Get-TareasRadar {
         })
 }
 
+function ConvertTo-InformeRadar {
+    param(
+        [string]$Texto,
+        [string]$Ruta,
+        [string]$Entrada = '',
+        [datetime]$FechaFallback = (Get-Date)
+    )
+
+    $info = [pscustomobject]@{
+        Fecha        = $FechaFallback
+        Criticos     = 0
+        Avisos       = 0
+        Informativos = 0
+        Equipo       = ''
+        Elevado      = ''
+        Evento       = ''
+        Ruta         = $Ruta
+        Entrada      = $Entrada
+        Archivado    = (-not [string]::IsNullOrWhiteSpace($Entrada))
+    }
+
+    if ([string]::IsNullOrWhiteSpace($Texto)) { return $info }
+
+    foreach ($l in ($Texto -split "`r?`n")) {
+        if ($l -match '^Fecha\s*:\s*(.+)$') {
+            try {
+                $info.Fecha = [datetime]::ParseExact($Matches[1].Trim(), 'dd/MM/yyyy HH:mm:ss', $null)
+            } catch {
+                Write-Verbose "Fecha con formato inesperado en $Ruta"
+            }
+        } elseif ($l -match '^Equipo\s*:\s*(.+)$') {
+            $info.Equipo = $Matches[1].Trim()
+        } elseif ($l -match '^Elevado\s*:\s*(.+)$') {
+            $info.Elevado = $Matches[1].Trim()
+        } elseif ($l -match '^Evento\s*:\s*(.+)$') {
+            $info.Evento = $Matches[1].Trim()
+        } elseif ($l -match '^Resultado\s*:\s*(\d+)\s+criticos,\s*(\d+)\s+avisos,\s*(\d+)\s+informativos') {
+            $info.Criticos = [int]$Matches[1]
+            $info.Avisos = [int]$Matches[2]
+            $info.Informativos = [int]$Matches[3]
+        }
+    }
+
+    return $info
+}
+
 function Read-InformesRadar {
     param(
         [string]$Directorio = $script:dirLogs,
@@ -87,66 +135,133 @@ function Read-InformesRadar {
         Select-Object -First $Maximo)
 
     foreach ($f in $archivos) {
-        $info = [pscustomobject]@{
-            Fecha        = $f.LastWriteTime
-            Criticos     = 0
-            Avisos       = 0
-            Informativos = 0
-            Equipo       = ''
-            Elevado      = ''
-            Evento       = ''
-            Archivo      = $f.FullName
-        }
-
+        $texto = ''
         try {
-            $lineas = @(Get-Content -LiteralPath $f.FullName -TotalCount 25 -Encoding UTF8 -ErrorAction Stop)
-            foreach ($l in $lineas) {
-                if ($l -match '^Fecha\s*:\s*(.+)$') {
-                    try {
-                        $info.Fecha = [datetime]::ParseExact($Matches[1].Trim(), 'dd/MM/yyyy HH:mm:ss', $null)
-                    } catch {
-                        Write-Verbose "Fecha con formato inesperado en $($f.Name)"
-                    }
-                } elseif ($l -match '^Equipo\s*:\s*(.+)$') {
-                    $info.Equipo = $Matches[1].Trim()
-                } elseif ($l -match '^Elevado\s*:\s*(.+)$') {
-                    $info.Elevado = $Matches[1].Trim()
-                } elseif ($l -match '^Evento\s*:\s*(.+)$') {
-                    $info.Evento = $Matches[1].Trim()
-                } elseif ($l -match '^Resultado\s*:\s*(\d+)\s+criticos,\s*(\d+)\s+avisos,\s*(\d+)\s+informativos') {
-                    $info.Criticos = [int]$Matches[1]
-                    $info.Avisos = [int]$Matches[2]
-                    $info.Informativos = [int]$Matches[3]
-                }
-            }
+            $texto = Get-Content -LiteralPath $f.FullName -Raw -Encoding UTF8 -ErrorAction Stop
         } catch {
             Write-Verbose "No se pudo leer $($f.FullName): $($_.Exception.Message)"
         }
-
-        $salida += $info
+        $salida += ConvertTo-InformeRadar -Texto $texto -Ruta $f.FullName -FechaFallback $f.LastWriteTime
     }
 
     return $salida
 }
 
+# Lee los informes archivados: logs\archivo\radar-<AAAA-MM>.zip
+function Read-InformesArchivo {
+    param(
+        [string]$Directorio = (Join-Path $script:dirLogs 'archivo'),
+        [int]$Maximo = 5000
+    )
+
+    $salida = @()
+    if ([string]::IsNullOrWhiteSpace($Directorio) -or -not (Test-Path -LiteralPath $Directorio)) {
+        return $salida
+    }
+
+    Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue
+
+    $zips = @(Get-ChildItem -Path $Directorio -Filter 'radar-*.zip' -File -ErrorAction SilentlyContinue |
+        Sort-Object LastWriteTime -Descending)
+
+    foreach ($z in $zips) {
+        $zip = $null
+        try {
+            $zip = [System.IO.Compression.ZipFile]::OpenRead($z.FullName)
+            foreach ($e in @($zip.Entries)) {
+                if ($e.Name -notlike 'radar-*.log') { continue }
+                if ($salida.Count -ge $Maximo) { break }
+
+                $lector = New-Object System.IO.StreamReader($e.Open())
+                try {
+                    $texto = $lector.ReadToEnd()
+                } finally {
+                    $lector.Dispose()
+                }
+
+                $salida += ConvertTo-InformeRadar -Texto $texto -Ruta $z.FullName -Entrada $e.Name -FechaFallback $z.LastWriteTime
+            }
+        } catch {
+            Write-Warning "No se pudo leer $($z.Name): $($_.Exception.Message)"
+        } finally {
+            if ($zip) { $zip.Dispose() }
+        }
+    }
+
+    return $salida
+}
+
+# Junta recientes + archivados, del mas nuevo al mas viejo.
+# El archivo se cachea: solo se vuelve a leer cuando cambia algun .zip.
+function Get-InformesDashboard {
+    param([int]$Maximo = 500)
+
+    $dirArchivo = Join-Path $script:dirLogs 'archivo'
+    $zips = @(Get-ChildItem -Path $dirArchivo -Filter 'radar-*.zip' -File -ErrorAction SilentlyContinue |
+        Sort-Object Name -Descending)
+    $clave = ($zips | ForEach-Object { "$($_.Name)|$($_.Length)|$($_.LastWriteTime.Ticks)" }) -join ';'
+
+    if (-not $script:CacheArchivo -or $script:CacheArchivo.Clave -ne $clave) {
+        $script:CacheArchivo = @{
+            Clave = $clave
+            Items = @(Read-InformesArchivo -Directorio $dirArchivo)
+        }
+    }
+
+    $todo = @($script:CacheArchivo.Items) + @(Read-InformesRadar -Maximo $Maximo)
+    return @($todo | Sort-Object Fecha -Descending | Select-Object -First $Maximo)
+}
+
 function Open-Informe {
-    param([string]$Ruta)
+    param(
+        [string]$Ruta,
+        [string]$Entrada = ''
+    )
 
     if ([string]::IsNullOrWhiteSpace($Ruta) -or -not (Test-Path -LiteralPath $Ruta)) {
         Write-Warning "El informe no existe: $Ruta"
         return
     }
 
+    $destino = $Ruta
+
+    # Informe archivado: se extrae a temp y se abre la copia.
+    if (-not [string]::IsNullOrWhiteSpace($Entrada)) {
+        try {
+            Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue
+            $dirTemporal = Join-Path ([System.IO.Path]::GetTempPath()) 'radar-informes'
+            if (-not (Test-Path -LiteralPath $dirTemporal)) {
+                New-Item -ItemType Directory -Path $dirTemporal -Force | Out-Null
+            }
+            $destino = Join-Path $dirTemporal $Entrada
+
+            $zip = [System.IO.Compression.ZipFile]::OpenRead($Ruta)
+            try {
+                $e = $zip.GetEntry($Entrada)
+                if (-not $e) {
+                    Write-Warning "No se encontro '$Entrada' en $Ruta"
+                    return
+                }
+                [System.IO.Compression.ZipFileExtensions]::ExtractToFile($e, $destino, $true)
+            } finally {
+                $zip.Dispose()
+            }
+        } catch {
+            Write-Warning "No se pudo extraer el informe archivado: $($_.Exception.Message)"
+            return
+        }
+    }
+
     $exe = [string]$script:Config.AbrirDetalleCon
     try {
         if ([string]::IsNullOrWhiteSpace($exe)) {
-            Start-Process -FilePath 'explorer.exe' -ArgumentList "`"$Ruta`""
+            Start-Process -FilePath 'explorer.exe' -ArgumentList "`"$destino`""
         } else {
-            Start-Process -FilePath $exe -ArgumentList "`"$Ruta`""
+            Start-Process -FilePath $exe -ArgumentList "`"$destino`""
         }
     } catch {
         try {
-            Start-Process -FilePath 'notepad.exe' -ArgumentList "`"$Ruta`""
+            Start-Process -FilePath 'notepad.exe' -ArgumentList "`"$destino`""
         } catch {
             Write-Warning "No se pudo abrir el informe: $($_.Exception.Message)"
         }
@@ -179,22 +294,36 @@ function Update-GridRadar {
     if (-not $Grid) { return }
     $Grid.Rows.Clear()
 
-    foreach ($i in (Read-InformesRadar -Maximo 200)) {
+    $filas = 0
+    foreach ($i in (Get-InformesDashboard -Maximo 2000)) {
+        $nombre = $i.Entrada
+        if ([string]::IsNullOrWhiteSpace($nombre)) { $nombre = Split-Path $i.Ruta -Leaf }
+
         $idx = $Grid.Rows.Add(
             $i.Fecha.ToString('dd/MM/yyyy HH:mm'),
             $i.Criticos,
             $i.Avisos,
             $i.Elevado,
-            (Split-Path $i.Archivo -Leaf),
+            $nombre,
             $i.Evento
         )
-        $Grid.Rows[$idx].Tag = $i.Archivo
+        $Grid.Rows[$idx].Tag = [pscustomobject]@{ Ruta = $i.Ruta; Entrada = $i.Entrada }
+
+        if ($i.Archivado) {
+            $Grid.Rows[$idx].DefaultCellStyle.ForeColor = [System.Drawing.Color]::DimGray
+            $Grid.Rows[$idx].Cells[4].ToolTipText = "Archivado en $(Split-Path $i.Ruta -Leaf)"
+        }
 
         if ($i.Criticos -gt 0) {
             $Grid.Rows[$idx].DefaultCellStyle.BackColor = [System.Drawing.Color]::FromArgb(253, 231, 233)
         } elseif ($i.Avisos -gt 0) {
             $Grid.Rows[$idx].DefaultCellStyle.BackColor = [System.Drawing.Color]::FromArgb(255, 248, 220)
         }
+        $filas++
+    }
+
+    if ($script:UiPie) {
+        $script:UiPie.Text = "Mostrando $filas corridas (las mas recientes). Doble click para abrir. En gris = comprimido en logs\archivo. Se actualiza cada 20 s."
     }
 }
 
@@ -343,7 +472,7 @@ function New-Dashboard {
     $form.Controls.Add($grid)
 
     $lblPie = New-Object System.Windows.Forms.Label
-    $lblPie.Text = 'Doble click en una fila para abrir el informe. Se actualiza solo cada 20 segundos.'
+    $lblPie.Text = 'Doble click en una fila para abrir el informe. En gris = comprimido en logs\archivo. Se actualiza solo cada 20 s.'
     $lblPie.Location = New-Object System.Drawing.Point(16, $yPie)
     $lblPie.AutoSize = $true
     $lblPie.ForeColor = [System.Drawing.Color]::DimGray
@@ -355,6 +484,7 @@ function New-Dashboard {
     $script:UiGrid = $grid
     $script:UiEstado = $lblEstado
     $script:UiBotonAlternar = $btnAlternar
+    $script:UiPie = $lblPie
 
     $refrescar = {
         Update-EstadoRadar
@@ -404,15 +534,15 @@ function New-Dashboard {
     $grid.Add_CellDoubleClick({
         param($origen, $e)
         if ($e.RowIndex -lt 0) { return }
-        $ruta = $origen.Rows[$e.RowIndex].Tag
-        if ($ruta) { Open-Informe -Ruta $ruta }
+        $item = $origen.Rows[$e.RowIndex].Tag
+        if ($item) { Open-Informe -Ruta $item.Ruta -Entrada $item.Entrada }
     })
 
     $grid.Add_KeyDown({
         param($origen, $e)
         if ($e.KeyCode -eq 'Return' -and $origen.SelectedRows.Count -gt 0) {
-            $ruta = $origen.SelectedRows[0].Tag
-            if ($ruta) { Open-Informe -Ruta $ruta }
+            $item = $origen.SelectedRows[0].Tag
+            if ($item) { Open-Informe -Ruta $item.Ruta -Entrada $item.Entrada }
         }
     })
 
@@ -445,6 +575,7 @@ function Show-Dashboard {
     $script:UiGrid = $null
     $script:UiEstado = $null
     $script:UiBotonAlternar = $null
+    $script:UiPie = $null
 }
 
 # ---------------------------------------------------------
@@ -464,14 +595,14 @@ function Update-Icono {
     if ($txt.Length -gt 63) { $txt = $txt.Substring(0, 63) }
     $script:Icono.Text = $txt
 
-    if ($script:UltimoVisto -and $u.Archivo -ne $script:UltimoVisto -and $u.Criticos -gt 0) {
+    if ($script:UltimoVisto -and $u.Ruta -ne $script:UltimoVisto -and $u.Criticos -gt 0) {
         $script:Icono.ShowBalloonTip(
             10000,
             'Radar de Seguridad',
             "$($u.Criticos) criticos en la ultima corrida. Click para abrir el dashboard.",
             [System.Windows.Forms.ToolTipIcon]::Warning)
     }
-    $script:UltimoVisto = $u.Archivo
+    $script:UltimoVisto = $u.Ruta
 }
 
 function Start-Tray {
